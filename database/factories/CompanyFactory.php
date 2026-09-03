@@ -1,0 +1,31 @@
+<?php
+
+namespace Database\Factories;
+
+use App\Models\Company;
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+/**
+ * @extends Factory<Company>
+ */
+class CompanyFactory extends Factory
+{
+    /**
+     * Define the model's default state.
+     *
+     * @return array<string, mixed>
+     */
+    public function definition(): array
+    {
+        return [
+            'name' => fake()->unique()->company(),
+            'code' => strtoupper(fake()->unique()->lexify('???')),
+            'address' => fake()->streetAddress(),
+            'contact_person' => fake()->name(),
+            'phone' => fake()->numerify('01#########'),
+            'email' => fake()->unique()->companyEmail(),
+            'bepza_reg_no' => strtoupper(fake()->bothify('BEPZA-####')),
+            'is_active' => true,
+        ];
+    }
+}
