@@ -6,9 +6,12 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Livewire\Volt\Component;
+use Livewire\WithPagination;
 
 new class extends Component
 {
+    use WithPagination;
+
     public ?int $editingId = null;
 
     public string $name = '';
@@ -115,7 +118,7 @@ new class extends Component
     public function with(): array
     {
         return [
-            'users' => User::orderBy('name')->get(),
+            'users' => User::orderBy('name')->simplePaginate(10),
             'roles' => UserRole::cases(),
         ];
     }
@@ -166,6 +169,8 @@ new class extends Component
             </tbody>
         </table>
     </div>
+
+    {{ $users->links('pagination::simple-tailwind') }}
 
     <x-modal name="user-form" focusable>
         <form wire:submit="save" class="space-y-6 p-6">

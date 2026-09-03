@@ -208,3 +208,15 @@ test('a super admin can grant and revoke role permissions from the roles and per
 
     expect(Gate::forUser($staff->fresh())->denies('job_entries.create'))->toBeTrue();
 });
+
+test('the users list paginates once there are more than one page\'s worth', function () {
+    $superAdmin = User::factory()->create();
+
+    // 10 per page — this plus the seeded super admin makes more than one page.
+    User::factory()->count(10)->create();
+
+    $this->actingAs($superAdmin);
+
+    Volt::test('settings.user-manager')
+        ->assertSeeHtml('rel="next"');
+});

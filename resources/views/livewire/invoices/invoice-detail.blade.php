@@ -7,10 +7,12 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
+use Livewire\WithPagination;
 
 new class extends Component
 {
     use WithFileUploads;
+    use WithPagination;
 
     public Invoice $invoice;
 
@@ -121,6 +123,7 @@ new class extends Component
             $this->refreshInvoiceStatus();
         });
 
+        $this->resetPage();
         $this->dispatch('close-modal', 'record-payment-form');
         session()->flash('status', 'Payment recorded.');
     }
@@ -285,11 +288,16 @@ new class extends Component
 
         $owedBeforePayments = $due ?? $grandTotal;
 
+        // Computed from the full, unpaginated set — $payments below is only
+        // ever one page of rows, and the balance owed must reflect every
+        // payment ever recorded, not just whichever page is on screen.
+        $totalPaidViaPayments = (float) $this->invoice->payments()->sum('amount');
+
         $payments = $this->invoice->payments()
             ->orderByDesc('paid_on')
             ->orderByDesc('id')
-            ->get()
-            ->map(fn ($payment) => (object) [
+            ->simplePaginate(10)
+            ->through(fn ($payment) => (object) [
                 'id' => $payment->id,
                 'amount' => (float) $payment->amount,
                 'paid_on' => $payment->paid_on,
@@ -298,8 +306,6 @@ new class extends Component
                 'description' => $payment->description,
                 'checkImageUrl' => $payment->check_image_path ? Storage::disk('public')->url($payment->check_image_path) : null,
             ]);
-
-        $totalPaidViaPayments = (float) $payments->sum('amount');
         $balanceDue = max(0, $owedBeforePayments - $totalPaidViaPayments);
         $finalAmount = $balanceDue;
 
@@ -417,6 +423,8 @@ new class extends Component
                     </div>
                 @endforeach
             </div>
+
+            {{ $payments->links('pagination::simple-tailwind') }}
         @endif
     </div>
 

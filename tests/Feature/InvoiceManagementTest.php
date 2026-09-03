@@ -844,3 +844,42 @@ test('an accountant can record a payment but gets forbidden deleting one', funct
         ->call('delete')
         ->assertForbidden();
 });
+
+test('payment history paginates and its totals reflect every payment, not just the current page', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'TEST-PAGINATION-1',
+        'period_start' => '2026-08-01',
+        'period_end' => '2026-08-31',
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_id' => $invoice->id,
+        'bill_amount' => 10000,
+    ]);
+
+    // More than one screen page's worth (10 per page) of small payments.
+    foreach (range(1, 12) as $i) {
+        $invoice->payments()->create([
+            'amount' => 100,
+            'paid_on' => now()->subDays($i)->toDateString(),
+        ]);
+    }
+
+    $this->actingAs($user);
+
+    $component = Volt::test('invoices.invoice-detail', ['invoice' => $invoice]);
+
+    // Only one page's worth of rows renders in the payment history list...
+    expect($component->viewData('payments'))->toHaveCount(10);
+    // ...but the balance owed accounts for all 12 payments (1200 total),
+    // not just the 10 visible on this page.
+    expect($component->viewData('totalPaidViaPayments'))->toBe(1200.0);
+    expect($component->viewData('balanceDue'))->toBe(8800.0);
+});
