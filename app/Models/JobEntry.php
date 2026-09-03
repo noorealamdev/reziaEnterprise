@@ -77,7 +77,7 @@ class JobEntry extends Model
 
     public function inCharge(): BelongsTo
     {
-        return $this->belongsTo(InCharge::class);
+        return $this->belongsTo(User::class, 'in_charge_id');
     }
 
     public function invoice(): BelongsTo

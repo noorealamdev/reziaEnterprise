@@ -16,7 +16,7 @@ return new class extends Migration
             $table->foreignId('company_id')->constrained()->cascadeOnDelete();
             $table->foreignId('service_category_id')->constrained()->restrictOnDelete();
             $table->foreignId('tiffin_department_id')->nullable()->constrained()->restrictOnDelete();
-            $table->foreignId('in_charge_id')->nullable()->constrained('in_charges')->nullOnDelete();
+            $table->foreignId('in_charge_id')->nullable()->constrained('users')->nullOnDelete();
             $table->date('entry_date');
             $table->string('supply_type');
             $table->string('buyer')->nullable();

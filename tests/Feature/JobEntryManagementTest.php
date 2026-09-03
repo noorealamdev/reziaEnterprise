@@ -1,7 +1,6 @@
 <?php
 
 use App\Models\Company;
-use App\Models\InCharge;
 use App\Models\Invoice;
 use App\Models\JobEntry;
 use App\Models\RolePermission;
@@ -977,8 +976,9 @@ test('editing the buffer-carrying department reverse-computes headcount correctl
     ]);
 });
 
-test('in-charge quick-add creates and links a new in-charge', function () {
+test('in-charge is selected from an existing active user', function () {
     $user = User::factory()->create();
+    $inCharge = User::factory()->staff()->create(['name' => 'Mr. Karim']);
     $company = Company::factory()->create();
     $category = makeServiceCategory('Daily Basic Labour');
     $company->serviceCategories()->attach($category);
@@ -992,19 +992,24 @@ test('in-charge quick-add creates and links a new in-charge', function () {
         ->set('supply_type', 'Daily Basic Labour')
         ->set('cost_amount', '10')
         ->set('bill_amount', '15')
-        ->set('inChargeSelection', 'new')
-        ->set('newInChargeName', 'Mr. Karim')
-        ->set('newInChargePhone', '01712345678')
+        ->set('inChargeSelection', (string) $inCharge->id)
         ->call('save')
         ->assertHasNoErrors();
-
-    $inCharge = InCharge::where('name', 'Mr. Karim')->first();
-    expect($inCharge)->not->toBeNull();
 
     $this->assertDatabaseHas('job_entries', [
         'company_id' => $company->id,
         'in_charge_id' => $inCharge->id,
     ]);
+});
+
+test('inactive users are not offered as in-charge options', function () {
+    $user = User::factory()->create();
+    User::factory()->staff()->inactive()->create(['name' => 'Retired Supervisor']);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->assertDontSee('Retired Supervisor');
 });
 
 test('editing a job entry updates its attributes', function () {

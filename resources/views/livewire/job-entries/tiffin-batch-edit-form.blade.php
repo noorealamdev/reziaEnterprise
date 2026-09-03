@@ -1,10 +1,10 @@
 <?php
 
 use App\Models\Company;
-use App\Models\InCharge;
 use App\Models\JobEntry;
 use App\Models\TiffinDepartment;
 use App\Models\TiffinItemPurchase;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Volt\Component;
@@ -196,7 +196,7 @@ new class extends Component
             : null;
 
         return [
-            'inCharges' => InCharge::where('is_active', true)->orderBy('name')->get(),
+            'inCharges' => User::where('is_active', true)->orderBy('name')->get(),
             'purchaseLocks' => $purchaseLocks,
             'eggBuffer' => $eggBuffer,
             'actualEggQuantity' => ($this->carriesEggBuffer && is_numeric($eggQuantity)) ? (float) $eggQuantity + $eggBuffer : null,

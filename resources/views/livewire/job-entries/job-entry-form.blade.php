@@ -1,12 +1,12 @@
 <?php
 
 use App\Models\Company;
-use App\Models\InCharge;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
 use App\Models\TiffinDepartmentItem;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
+use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -24,12 +24,6 @@ new class extends Component
     public ?int $tiffin_department_id = null;
 
     public string $inChargeSelection = '';
-
-    public bool $addingInCharge = false;
-
-    public string $newInChargeName = '';
-
-    public ?string $newInChargePhone = null;
 
     public string $entry_date = '';
 
@@ -185,11 +179,6 @@ new class extends Component
     public function updatedBillRate(): void
     {
         $this->recomputeAmounts();
-    }
-
-    public function updatedInChargeSelection(): void
-    {
-        $this->addingInCharge = $this->inChargeSelection === 'new';
     }
 
     /**
@@ -400,14 +389,6 @@ new class extends Component
 
     private function resolveInChargeId(): ?int
     {
-        if ($this->inChargeSelection === 'new') {
-            return InCharge::create([
-                'name' => trim($this->newInChargeName),
-                'phone' => $this->newInChargePhone ? trim($this->newInChargePhone) : null,
-                'is_active' => true,
-            ])->id;
-        }
-
         return $this->inChargeSelection !== '' ? (int) $this->inChargeSelection : null;
     }
 
@@ -455,11 +436,6 @@ new class extends Component
             'bill_amount' => ['required', 'numeric', 'min:0'],
             'is_off_day' => ['boolean'],
             'remarks' => ['nullable', 'string', 'max:2000'],
-            'newInChargeName' => [
-                Rule::requiredIf(fn () => $this->inChargeSelection === 'new'),
-                'nullable', 'string', 'max:255',
-            ],
-            'newInChargePhone' => ['nullable', 'string', 'max:30'],
         ]);
 
         if ($validated['service_category_id'] != $tiffinId) {
@@ -498,8 +474,6 @@ new class extends Component
                 $validated['cost_amount'] = round((float) $validated['quantity'] * (float) $purchase->cost_rate, 2);
             }
         }
-
-        unset($validated['newInChargeName'], $validated['newInChargePhone']);
 
         DB::transaction(function () use ($validated) {
             $validated['in_charge_id'] = $this->resolveInChargeId();
@@ -549,10 +523,6 @@ new class extends Component
         $rules = [
             'company_id' => ['required', 'integer', 'exists:companies,id'],
             'entry_date' => ['required', 'date'],
-            'newInChargeName' => [
-                Rule::requiredIf(fn () => $this->inChargeSelection === 'new'),
-                'nullable', 'string', 'max:255',
-            ],
         ];
 
         foreach ($touchedDepartments as $department) {
@@ -760,7 +730,7 @@ new class extends Component
             'companies' => Company::orderBy('name')->get(),
             'serviceCategories' => $company ? $company->serviceCategories()->orderBy('sort_order')->get() : collect(),
             'tiffinDepartments' => $company ? $company->tiffinDepartments()->orderBy('name')->get() : collect(),
-            'inCharges' => InCharge::where('is_active', true)->orderBy('name')->get(),
+            'inCharges' => User::where('is_active', true)->orderBy('name')->get(),
             'supplyTypeSuggestions' => ($this->company_id && $this->service_category_id)
                 ? JobEntry::where('company_id', $this->company_id)
                     ->where('service_category_id', $this->service_category_id)
@@ -1090,21 +1060,7 @@ new class extends Component
                 @foreach ($inCharges as $inCharge)
                     <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
                 @endforeach
-                <option value="new">+ Add new in-charge…</option>
             </x-select-input>
-        </div>
-
-        <div x-show="$wire.inChargeSelection === 'new'" x-cloak class="space-y-6">
-            <div>
-                <x-input-label for="newInChargeName" value="New In-Charge Name" />
-                <x-text-input wire:model="newInChargeName" id="newInChargeName" placeholder="e.g. Mr. Monir" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('newInChargeName')" class="mt-2" />
-            </div>
-            <div>
-                <x-input-label for="newInChargePhone" value="New In-Charge Phone" />
-                <x-text-input wire:model="newInChargePhone" id="newInChargePhone" placeholder="e.g. 01712345678" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('newInChargePhone')" class="mt-2" />
-            </div>
         </div>
 
         <div>

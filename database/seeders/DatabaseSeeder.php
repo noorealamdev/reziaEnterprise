@@ -28,7 +28,6 @@ class DatabaseSeeder extends Seeder
         $this->call(TiffinDepartmentSeeder::class);
         $this->call(TiffinItemSeeder::class);
         $this->call(CompanySeeder::class);
-        $this->call(InChargeSeeder::class);
         $this->call(JobEntrySeeder::class);
     }
 }

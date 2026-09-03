@@ -3,7 +3,6 @@
 namespace Database\Seeders;
 
 use App\Models\Company;
-use App\Models\InCharge;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
 use App\Models\TiffinDepartment;
@@ -31,8 +30,6 @@ class JobEntrySeeder extends Seeder
         $categories = ServiceCategory::pluck('id', 'name');
         $swing = TiffinDepartment::where('name', 'Swing')->first();
         $washWorker = TiffinDepartment::where('name', 'Wash Worker')->first();
-        $monir = InCharge::where('name', 'Mr. Monir')->first();
-        $sagor = InCharge::where('name', 'Sagor Vai')->first();
 
         $today = now();
 
@@ -43,19 +40,19 @@ class JobEntrySeeder extends Seeder
                 'Banana' => [40, 5, 0],
                 'Egg' => [40, 11.5, 30],
                 'Bread' => [40, 7.8, 0],
-            ], $monir);
+            ]);
 
             $this->tiffinDay($company, $categories['Tiffin'], $swing, $today->copy()->subDay(), [
                 'Banana' => [38, 5, 0],
                 'Egg' => [38, 11.5, 30],
                 'Bread' => [38, 7.8, 0],
-            ], $monir);
+            ]);
 
             $this->tiffinDay($company, $categories['Tiffin'], $swing, $today->copy()->subDays(2), [
                 'Banana' => [42, 5, 0],
                 'Egg' => [42, 11.5, 30],
                 'Bread' => [42, 7.8, 0],
-            ], $monir);
+            ]);
         }
 
         if ($washWorker && $categories->has('Tiffin')) {
@@ -66,13 +63,13 @@ class JobEntrySeeder extends Seeder
                 'Banana' => [25, 5, 0],
                 'Egg' => [25, 11.5, 30],
                 'Bread' => [25, 7.8, 0],
-            ], $sagor, includeEggBuffer: false);
+            ], includeEggBuffer: false);
 
             $this->tiffinDay($company, $categories['Tiffin'], $washWorker, $today->copy()->subDay(), [
                 'Banana' => [22, 5, 0],
                 'Egg' => [22, 11.5, 30],
                 'Bread' => [22, 7.8, 0],
-            ], $sagor, includeEggBuffer: false);
+            ], includeEggBuffer: false);
         }
 
         if ($categories->has('Daily Basic Labour')) {
@@ -81,7 +78,6 @@ class JobEntrySeeder extends Seeder
                 'quantity' => 12,
                 'cost_rate' => 550,
                 'bill_rate' => 650,
-                'in_charge_id' => $monir?->id,
             ]);
 
             $this->entry($company, $categories['Daily Basic Labour'], $today->copy()->subDay(), [
@@ -89,7 +85,6 @@ class JobEntrySeeder extends Seeder
                 'quantity' => 10,
                 'cost_rate' => 550,
                 'bill_rate' => 650,
-                'in_charge_id' => $monir?->id,
             ]);
 
             $this->entry($company, $categories['Daily Basic Labour'], $today->copy()->subDays(3), [
@@ -199,7 +194,7 @@ class JobEntrySeeder extends Seeder
      * @param  array<string, array{0: float, 1: float, 2: float}>  $items  Keyed by item name: [quantity, cost_rate, bill_rate]. For Egg, quantity is the day's headcount — the fixed egg buffer (config('tiffin.egg_buffer_quantity')) is added on top for the stored quantity/cost, matching the real Tiffin batch form, while bill_amount stays headcount × rate.
      * @param  bool  $includeEggBuffer  The +5 buffer is sent once per company per day, not once per department — pass false for every department after the first one being seeded for the same company/day.
      */
-    private function tiffinDay(Company $company, int $categoryId, TiffinDepartment $department, Carbon $date, array $items, ?InCharge $inCharge, bool $includeEggBuffer = true): void
+    private function tiffinDay(Company $company, int $categoryId, TiffinDepartment $department, Carbon $date, array $items, bool $includeEggBuffer = true): void
     {
         foreach ($items as $name => [$headcountOrQuantity, $costRate, $billRate]) {
             $isEgg = $name === 'Egg';
@@ -212,7 +207,6 @@ class JobEntrySeeder extends Seeder
                 'bill_rate' => $billRate,
                 'bill_amount_basis' => $headcountOrQuantity,
                 'tiffin_department_id' => $department->id,
-                'in_charge_id' => $inCharge?->id,
             ]);
         }
     }
