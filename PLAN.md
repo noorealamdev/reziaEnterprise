@@ -2615,3 +2615,273 @@ owed," which stops mattering once payment is complete. The underlying
 the badge's render condition gained `&& $row->status !== 'paid'`. New
 test confirms a paid+signed invoice renders no "Signed" badge while a
 due+signed one still does. 219 tests passing (up from 218).
+
+## Staff salary tracking (done, 2026-09-03)
+
+Client wants to track salaries for all staff — drivers, laborers, floor
+supervisors, office staff — most of whom will never need or want an app
+login. Built as a new `Employee` entity independent of `users`, mirroring
+the app's existing Company → Bill Statement → Invoice Detail hierarchy:
+
+- **Employees** (`app/Models/Employee.php`, `employees` table: name,
+  phone, position, `monthly_salary`, `is_active`, remarks) — the roster,
+  CRUD'd via `employees/*` routes and `livewire/employees/employee-list`
+  + `employee-form`, directly modeled on `companies/company-list` +
+  `company-form`.
+- **SalaryPayment** (`app/Models/SalaryPayment.php`, `salary_payments`
+  table: `employee_id`, `for_month` — stored as the 1st of the month it
+  pays, `amount`, `paid_on`, `payment_method`, remarks, `created_by`) —
+  mirrors `invoice_payments` exactly. No unique constraint on
+  `(employee_id, for_month)`: multiple partial payments in the same
+  month are allowed, same as invoice payments.
+- **Staff Salaries** (`livewire/staff-salaries/staff-salaries.blade.php`,
+  route `staff-salaries.index`) — the monthly cross-employee view
+  (`<input type="month">`-driven, defaulting to the current month):
+  Expected/Paid/Balance/status per active employee, with Due/Partially
+  Paid/Paid totals — modeled on Bill Statement's per-company monthly
+  view but simpler (no year+month dropdown pair needed since payroll is
+  inherently single-month-scoped, just a plain month picker).
+- **Employee Detail** (`livewire/employees/employee-detail.blade.php`,
+  route `employees.show`) — this month's status card, a "Record
+  Payment" modal, and full payment history with remove — modeled on
+  `invoices/invoice-detail`'s payment section minus everything
+  print/VAT/signed-copy specific, since none of that applies to payroll.
+  A `?month=YYYY-MM` query param (same convention `job-entries.create`
+  uses for `?company=`) lets the Staff Salaries page's "Record Payment"
+  link jump straight into the modal pre-filled for that month.
+
+Status (Due/Partially Paid/Paid) is computed live from
+`sum(salary_payments.amount) vs monthly_salary` for the relevant month
+— never a stored column, same pattern as Bill Statement's pending rows
+and Invoice's derived status. Known v1 simplification: `monthly_salary`
+is a single current rate, not a rate history, so a past raise/cut
+applies retroactively to how old months are judged — acceptable for a
+first version per the client's own scoping, revisit only if it becomes
+a real problem.
+
+Permissions: 5 new `App\Permission` cases (`EmployeesView/Create/Modify`,
+`SalaryPaymentsCreate/Modify`), grouped "Staff Salaries". Accountant
+gets the same create-only rule as every other module (seeded via
+`RolePermissionSeeder`); Staff gets nothing by default, as always.
+`staff-salaries.index` reuses `employees.view` rather than adding a 6th
+permission — same underlying data, just sliced differently.
+
+New sidebar link (`@can('employees.view')`) points at Staff Salaries
+(the operational view), not the Employees roster — same pattern Bill
+Statement uses over a raw Invoices list.
+
+`tests/Feature/EmployeeManagementTest.php` (9 tests) and
+`tests/Feature/SalaryPaymentTest.php` (6 tests): CRUD, search,
+delete-blocked-when-has-payments, Accountant create-but-403-on-edit,
+partial→full payment status transitions, a payment in one month never
+bleeding into another month's status, payment removal recalculating
+status back down, Accountant record-but-403-on-delete, and the
+`?month=` deep-link. `PermissionsTest.php` extended with the new
+Accountant grants (the "every permission" loops already covered the 5
+new cases automatically). One test-only gotcha hit along the way:
+`assertDontSee('Paid')` false-failed because the Record Payment modal's
+"Paid On" label is always in the DOM (just Alpine-hidden), so "Paid" is
+a substring match regardless of actual status — fixed by asserting on
+`viewData('statusLabel')` directly instead of scraping rendered HTML
+text, everywhere status needed checking in these tests.
+
+Manually verified via tinker against the real dev DB: two 5,000 partial
+payments against a 15,000 monthly salary correctly summed to
+"Partially Paid" (10,000/15,000), a third payment flipped it to
+"Paid" (15,000/15,000), and a different month for the same employee
+independently stayed at 0 paid / Due throughout. 234 tests passing (up
+from 219).
+
+## Expense tracking (done, 2026-09-03)
+
+Client wants to record business expenses — transport cost, tea bills,
+cash advances taken from accounts. Confirmed free-text only (no managed
+category list like Service Categories), and kept as a standalone ledger
+rather than feeding into the Dashboard's Profit panel (which is about
+per-job billing margin, a different concept from general overhead).
+
+Built as a single new `Expense` entity (`expenses` table: `expense_date`,
+`amount`, `description` — the free-text field carrying "Transport cost
+today", "Tea bill", "Cash advance to Karim", etc. — `remarks` for
+overflow detail, `created_by`) and one Livewire component,
+`livewire/expenses/expense-manager.blade.php`, modeled directly on
+`tiffin-purchases/purchase-manager.blade.php`'s "Purchases" tab (same
+modal-based add/edit, year/month filter, running total card) rather
+than the multi-page Companies/Employees pattern — a flat ledger doesn't
+need a per-row detail page. Single route `expenses.index`; add/edit/
+delete all happen via modals on that one page.
+
+Permissions: 3 new cases (`ExpensesView/Create/Modify`), grouped
+"Expenses". Accountant gets the usual create-only grant (view + create,
+never modify) via `RolePermissionSeeder`; Staff gets nothing by
+default. New sidebar link (`@can('expenses.view')`) after Staff
+Salaries.
+
+`tests/Feature/ExpenseManagementTest.php` (10 tests): listing, year/
+month filtering (including the total-for-scope figure), create/edit/
+delete, required-field validation, Accountant create-but-403-on-edit-
+or-delete, Staff forbidden outright. `PermissionsTest.php` extended
+with the new Accountant grant. 244 tests passing (up from 234).
+
+## Pagination audit (done, 2026-09-03)
+
+Client asked to confirm every data table is correctly paginated.
+Surveyed all 33 Livewire components; the substantive listing screens
+(Companies, Job Entries, Bill Statement, Tiffin Purchases, Daily
+Summary, Employees, Expenses) already paginate correctly — found and
+fixed 4 real gaps, all growing, unbounded lists that had none:
+
+- **`settings/user-manager.blade.php`** (Users list) — was a bare
+  `User::orderBy('name')->get()`. Added `WithPagination` +
+  `simplePaginate(10)`.
+- **`employees/employee-detail.blade.php`** (a staff member's salary
+  Payment History) — grows without bound over years of employment.
+  Added pagination; `recordPayment()` now calls `resetPage()` so a
+  freshly recorded payment (newest-first) is visible immediately
+  regardless of which page was open.
+- **`invoices/invoice-detail.blade.php`** (an invoice's Payment
+  History) — same fix, plus the same `resetPage()` on `recordPayment()`.
+- **`staff-salaries/staff-salaries.blade.php`** (built earlier today,
+  already missing pagination) — added the same manual
+  `LengthAwarePaginator`-around-a-slice pattern Daily Summary uses for
+  its own computed collections, since rows here come from a
+  status-filtered `map()`, not a raw query.
+
+The one bug class worth flagging: naively pagination-wrapping a list
+whose *sum* feeds a displayed total silently breaks that total — it
+would only reflect whichever page happened to be on screen. Both
+Invoice Detail's `balanceDue`/`totalPaidViaPayments` and Staff
+Salaries' `totalExpected`/`totalPaid`/`totalOutstanding` compute from
+the full unpaginated set (an extra query / a pre-slice collection
+sum), only the *display* list is paginated — this was already the
+pattern Bill Statement and Expenses used for their own totals, just
+hadn't been applied to these two yet.
+
+Screens deliberately left unpaginated, not overlooked: Dashboard's
+"Ready to Invoice"/"Today's Activity" (bounded snapshot widgets, full
+data lives at Bill Statement/Job Entries), Company Detail's "Recent
+Entries" (explicit `limit(30)` + a "View All →" link to the real
+paginated Job Entries list), and the small admin-managed reference
+lists (Service Categories, Tiffin Departments/Items, Roles &
+Permissions) — these are short, deliberately bounded catalogs, not
+growing transactional data.
+
+4 new tests added (`InvoiceManagementTest`, `SalaryPaymentTest` ×2,
+`SettingsManagementTest`), each asserting the specific failure mode
+that matters: only one page's worth of rows renders, but the total/
+count still reflects every row, not just the visible page. 248 tests
+passing (up from 244).
+
+## Accountant create-only rule: full audit (done, 2026-09-03)
+
+Client asked to confirm only Super Admin can edit/delete anything, and
+Accountant is strictly create-only, everywhere. Audited every
+`Gate::authorize()` call (32 call sites across every module — Companies,
+Job Entries, Tiffin Purchases, Invoices/Payments/Signed Copies,
+Employees, Salary Payments, Expenses, Service Categories/Tiffin Items,
+Settings/Users) against its actual mutating action, and every `@can`
+in Blade against the matching backend check. All correctly split
+`.create` (only ever used for genuinely new records — including the
+subtler cases: `saveTiffinItemBatch()` always creates new `JobEntry`
+rows, and `uploadSignedCopy()` only ever runs when no signed copy
+exists yet, since the form only renders that far) from `.modify`
+(edits, deletes, and the "already have a signed copy" removal path).
+`RolePermissionSeeder`'s Accountant grant list contains zero `.modify`
+cases. Service Categories/Tiffin Items intentionally give Accountant
+no access at all (a single bundled `service_categories.manage`
+permission, never granted) rather than a create/modify split — a
+stricter outcome than asked for, not a gap. `users.manage` stays a
+hard Super-Admin-only check regardless of any grant, already covered
+by an existing test.
+
+Found no backend or UI bugs — the one real gap was test coverage, not
+behavior: `CompanyManagementTest` and `TiffinPurchaseManagementTest`
+were the only two management modules without an explicit "accountant
+can create but 403s on edit/delete" regression test (every other
+module already had one). Added both, mirroring the exact pattern
+already used everywhere else. 250 tests passing (up from 248).
+
+## Public homepage (done, 2026-09-03)
+
+Client wants a public marketing page for Rezia Enterprise — separate
+concern from the internal management app this whole project has been
+until now. Confirmed: the homepage takes over `/` (previously a bare
+`Route::redirect('/', '/dashboard')`), with a "Staff Login" link to
+`/login` for the internal app; content is a standard one-page company
+site (hero, services, about, contact) using data already on file
+(`config('company.*')` — name, tagline, phones, email, address, the
+same values the invoice letterhead already uses — and the services
+list from this project's own business summary in this file).
+
+`resources/views/home.blade.php` — a standalone Blade view (own
+`<html>` document, not the authenticated `x-app-layout` shell, same
+`@vite(...)` include `layouts/guest.blade.php` already uses for the
+login page), styled with the app's existing `brand-*` color scale from
+`resources/css/app.css` and dark-mode variants throughout, so it looks
+like the same product family as the internal app rather than a
+mismatched bolt-on. No new backend logic — a static page, no contact
+form (not asked for, and would need spam handling/mail wiring beyond
+scope).
+
+`routes/web.php`: `Route::view('/', 'home')->name('home')` replaces
+the old redirect. The stock Laravel scaffold test asserting the old
+`/` → `/dashboard` redirect (`ExampleTest.php`) was updated to assert
+the new behavior instead of being left contradicting reality.
+`tests/Feature/HomepageTest.php` (new, 3 tests): loads without auth,
+shows services/contact details, links to Staff Login. 253 tests passing
+(up from 250).
+
+Not verified in an actual browser — no browser-automation tool was
+available this session, so this was checked via `assertOk()`/`assertSee()`
+HTTP-level tests and a raw response fetch, not a visual/rendered check.
+Worth a real look before treating it as launch-ready, and note per
+Boost guidelines: if the client doesn't see the new page reflected,
+`npm run build` (or `npm run dev`/`composer run dev`) may be needed to
+compile the frontend assets.
+
+## Homepage visual redesign (done, 2026-09-03)
+
+Client asked for a more professional/modern look, and specifically to
+verify it visually via Playwright + Chromium rather than judging from
+markup alone. No Playwright MCP tool was available, so it was installed
+ad hoc: `npx playwright install chromium` (global npm cache, not added
+to `package.json` — no project dependency change) and driven via a
+throwaway Node script in the scratchpad directory, screenshotting
+desktop/tablet/mobile plus a dark-mode pass and the mobile-menu
+interaction, viewed via the `Read` tool. Screenshots and the script
+were deleted after use — nothing under version control.
+
+Redesign, still zero new npm dependencies:
+- **Distinct icon per service/value-prop** (`x-home.service-icon`,
+  `resources/views/components/home/service-icon.blade.php`) — 13 hand-
+  drawn line icons (tiffin carrier, two-person labor, brick stack, fuel
+  drop, forklift crate, ETP droplet, plus the "Why Choose Us" and
+  contact-card icons), replacing the original build's one generic
+  checkmark reused everywhere.
+- **Two-column hero** with a decorative "service summary" card (2×2
+  icon grid + "One vendor" badge) standing in for a hero photo, plus
+  soft blurred gradient blobs behind it — there's no real product
+  photography to use, so an abstract composition fills that role
+  instead of a stock-photo placeholder.
+- **New "Why Rezia Enterprise" section** — four honest, qualitative
+  value props (single vendor, BEPZA zone experience, consistent daily
+  service, direct communication). Deliberately no fabricated numbers
+  ("10+ years", "50+ clients") since none of that is real data on file.
+- **Gradient CTA band** before the contact section.
+- **Working mobile navigation** — the original build's nav links simply
+  vanished below the `sm` breakpoint with no menu at all. Fixed with a
+  pure-CSS checkbox-driven disclosure (no JS dependency): the checkbox
+  and every element that reacts to it sit inside one `group` (the
+  `<header>`), toggled via `group-has-[:checked]:*`. Worth noting for
+  future editors of this file: a plain `peer-checked:` was tried first
+  and silently didn't work, because `peer-*` only ever matches a literal
+  DOM sibling of the checkbox — none of the icons or the mobile panel
+  here are actually siblings of it, just nested descendants of one.
+  `group-has-[:checked]:` matches regardless of nesting depth, which is
+  what this pattern actually needs.
+- **Hover/transition polish** throughout (card lift-on-hover, icon
+  color inversion on hover, button transitions) and a richer 3-column
+  footer.
+
+No test changes needed — `HomepageTest.php`'s content assertions still
+matched the redesigned markup. Full suite still 253 passing.

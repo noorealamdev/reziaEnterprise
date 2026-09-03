@@ -1,7 +1,7 @@
 <?php
 
-it('redirects the root url to the dashboard', function () {
+it('shows the public homepage at the root url', function () {
     $response = $this->get('/');
 
-    $response->assertRedirect('/dashboard');
+    $response->assertOk()->assertSee(config('company.name'));
 });
