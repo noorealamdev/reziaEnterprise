@@ -1,12 +1,16 @@
 <?php
 
 use App\Models\Company;
+use App\Models\Employee;
 use App\Models\Invoice;
 use App\Models\JobEntry;
 use App\Models\TiffinDepartment;
 use Illuminate\Support\Facades\Route;
 
-Route::redirect('/', '/dashboard');
+// Public marketing homepage — anyone can view it, no login required. The
+// internal app itself starts at /login (unauthenticated) or /dashboard
+// (authenticated), reached via the "Staff Login" link on this page.
+Route::view('/', 'home')->name('home');
 
 // No permission gate here on purpose — this is the hardcoded post-login
 // landing page (see login.blade.php's redirectIntended default), so it
@@ -106,6 +110,30 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('bill-statement', fn () => view('bill-statement.index'))
         ->middleware('can:bill_statement.view')
         ->name('bill-statement.index');
+
+    Route::get('employees', fn () => view('employees.index'))
+        ->middleware('can:employees.view')
+        ->name('employees.index');
+
+    Route::get('employees/create', fn () => view('employees.create'))
+        ->middleware('can:employees.create')
+        ->name('employees.create');
+
+    Route::get('employees/{employee}', fn (Employee $employee) => view('employees.show', [
+        'employee' => $employee,
+    ]))->middleware('can:employees.view')->name('employees.show');
+
+    Route::get('employees/{employee}/edit', fn (Employee $employee) => view('employees.edit', [
+        'employee' => $employee,
+    ]))->middleware('can:employees.modify')->name('employees.edit');
+
+    Route::get('staff-salaries', fn () => view('staff-salaries.index'))
+        ->middleware('can:employees.view')
+        ->name('staff-salaries.index');
+
+    Route::get('expenses', fn () => view('expenses.index'))
+        ->middleware('can:expenses.view')
+        ->name('expenses.index');
 });
 
 require __DIR__.'/auth.php';

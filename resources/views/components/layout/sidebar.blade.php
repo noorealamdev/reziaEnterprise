@@ -103,5 +103,30 @@
                 Bill Statement
             </x-layout.sidebar-link>
         @endcan
+
+        @can('employees.view')
+            <x-layout.sidebar-link :href="route('staff-salaries.index')" :active="request()->routeIs(['staff-salaries.*', 'employees.*'])">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="9" cy="8" r="3.25" />
+                        <path d="M3.5 20v-1.5A4.5 4.5 0 0 1 8 14h2a4.5 4.5 0 0 1 4.5 4.5V20" />
+                        <path d="M15.5 5.5a3 3 0 0 1 0 5.8M18.5 20v-1.5a4.3 4.3 0 0 0-2.7-4" />
+                    </svg>
+                </x-slot:icon>
+                Staff Salaries
+            </x-layout.sidebar-link>
+        @endcan
+
+        @can('expenses.view')
+            <x-layout.sidebar-link :href="route('expenses.index')" :active="request()->routeIs('expenses.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7v10M9.5 9.5c0-1.1 1.1-2 2.5-2s2.5.9 2.5 2-1.1 2-2.5 2-2.5.9-2.5 2 1.1 2 2.5 2 2.5-.9 2.5-2" />
+                    </svg>
+                </x-slot:icon>
+                Expenses
+            </x-layout.sidebar-link>
+        @endcan
     </nav>
 </aside>

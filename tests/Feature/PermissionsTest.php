@@ -30,12 +30,21 @@ test('accountants seeded defaults can create but not modify', function () {
     $accountant = User::factory()->accountant()->create();
     RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::JobEntriesCreate->value]);
     RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::PaymentsCreate->value]);
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EmployeesCreate->value]);
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::SalaryPaymentsCreate->value]);
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::ExpensesCreate->value]);
 
     expect(Gate::forUser($accountant)->allows('job_entries.create'))->toBeTrue();
     expect(Gate::forUser($accountant)->denies('job_entries.modify'))->toBeTrue();
     expect(Gate::forUser($accountant)->allows('payments.create'))->toBeTrue();
     expect(Gate::forUser($accountant)->denies('payments.modify'))->toBeTrue();
     expect(Gate::forUser($accountant)->denies('invoices.modify'))->toBeTrue();
+    expect(Gate::forUser($accountant)->allows('employees.create'))->toBeTrue();
+    expect(Gate::forUser($accountant)->denies('employees.modify'))->toBeTrue();
+    expect(Gate::forUser($accountant)->allows('salary_payments.create'))->toBeTrue();
+    expect(Gate::forUser($accountant)->denies('salary_payments.modify'))->toBeTrue();
+    expect(Gate::forUser($accountant)->allows('expenses.create'))->toBeTrue();
+    expect(Gate::forUser($accountant)->denies('expenses.modify'))->toBeTrue();
 });
 
 test('an accountant can never manage users regardless of granted permissions', function () {

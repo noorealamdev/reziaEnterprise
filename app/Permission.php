@@ -32,6 +32,17 @@ enum Permission: string
     case PaymentsCreate = 'payments.create';
     case PaymentsModify = 'payments.modify';
 
+    case EmployeesView = 'employees.view';
+    case EmployeesCreate = 'employees.create';
+    case EmployeesModify = 'employees.modify';
+
+    case SalaryPaymentsCreate = 'salary_payments.create';
+    case SalaryPaymentsModify = 'salary_payments.modify';
+
+    case ExpensesView = 'expenses.view';
+    case ExpensesCreate = 'expenses.create';
+    case ExpensesModify = 'expenses.modify';
+
     case SettingsManage = 'settings.manage';
 
     public function label(): string
@@ -56,6 +67,14 @@ enum Permission: string
             self::InvoicesModify => 'Delete invoices',
             self::PaymentsCreate => 'Record payments & upload signed copies',
             self::PaymentsModify => 'Delete payments / signed copies',
+            self::EmployeesView => 'View staff',
+            self::EmployeesCreate => 'Add staff',
+            self::EmployeesModify => 'Edit / delete staff',
+            self::SalaryPaymentsCreate => 'Record salary payments',
+            self::SalaryPaymentsModify => 'Delete salary payments',
+            self::ExpensesView => 'View expenses',
+            self::ExpensesCreate => 'Record expenses',
+            self::ExpensesModify => 'Edit / delete expenses',
             self::SettingsManage => 'Manage company logo',
         };
     }
@@ -72,6 +91,9 @@ enum Permission: string
             self::BillStatementView => 'Bill Statement',
             self::InvoicesView, self::InvoicesCreate, self::InvoicesModify => 'Invoices',
             self::PaymentsCreate, self::PaymentsModify => 'Payments',
+            self::EmployeesView, self::EmployeesCreate, self::EmployeesModify,
+            self::SalaryPaymentsCreate, self::SalaryPaymentsModify => 'Staff Salaries',
+            self::ExpensesView, self::ExpensesCreate, self::ExpensesModify => 'Expenses',
             self::SettingsManage => 'Settings',
         };
     }

@@ -33,6 +33,11 @@ class RolePermissionSeeder extends Seeder
             Permission::InvoicesView,
             Permission::InvoicesCreate,
             Permission::PaymentsCreate,
+            Permission::EmployeesView,
+            Permission::EmployeesCreate,
+            Permission::SalaryPaymentsCreate,
+            Permission::ExpensesView,
+            Permission::ExpensesCreate,
         ];
 
         foreach ($accountantGrants as $permission) {
