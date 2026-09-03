@@ -2,9 +2,12 @@
 
 use App\Models\Company;
 use App\Models\JobEntry;
+use App\Models\RolePermission;
 use App\Models\ServiceCategory;
 use App\Models\TiffinDepartment;
 use App\Models\User;
+use App\Permission;
+use App\UserRole;
 use Database\Seeders\ServiceCategorySeeder;
 use Database\Seeders\TiffinDepartmentSeeder;
 use Livewire\Volt\Volt;
@@ -257,4 +260,20 @@ test('an invalid period query param is ignored instead of crashing the form', fu
         ->get('/invoices/create?company='.$company->id.'&period=not-a-date')
         ->assertOk()
         ->assertSee('period&quot;:&quot;&quot;', false);
+});
+
+test('an accountant can create a company but gets a 403 trying to edit or delete one', function () {
+    $accountant = User::factory()->accountant()->create();
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::CompaniesCreate->value]);
+    $company = Company::factory()->create();
+
+    $this->actingAs($accountant);
+
+    $this->get(route('companies.create'))->assertOk();
+    $this->get(route('companies.edit', $company))->assertForbidden();
+
+    Volt::test('companies.company-list')
+        ->call('confirmDelete', $company->id)
+        ->call('delete')
+        ->assertForbidden();
 });

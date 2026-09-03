@@ -2,10 +2,13 @@
 
 use App\Models\Company;
 use App\Models\JobEntry;
+use App\Models\RolePermission;
 use App\Models\TiffinDepartment;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
 use App\Models\User;
+use App\Permission;
+use App\UserRole;
 use Livewire\Volt\Volt;
 
 test('guests are redirected to login', function () {
@@ -335,4 +338,39 @@ test('changing the supply year clears an incompatible month selection', function
         ->set('supplyMonthFilter', '3')
         ->set('supplyYearFilter', '2025')
         ->assertSet('supplyMonthFilter', '');
+});
+
+test('an accountant can record a purchase but gets a 403 trying to edit or delete one', function () {
+    $accountant = User::factory()->accountant()->create();
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::TiffinPurchasesCreate->value]);
+    $egg = TiffinItem::create(['name' => 'Egg']);
+    $purchase = TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-01',
+        'quantity' => 400,
+        'cost_rate' => 10,
+        'cost_amount' => 4000,
+    ]);
+
+    $this->actingAs($accountant);
+
+    Volt::test('tiffin-purchases.purchase-manager')
+        ->call('startCreate')
+        ->set('tiffin_item_id', $egg->id)
+        ->set('purchase_date', '2026-09-05')
+        ->set('quantity', '100')
+        ->set('cost_rate', '11')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    Volt::test('tiffin-purchases.purchase-manager')
+        ->call('startEdit', $purchase->id)
+        ->set('quantity', '999')
+        ->call('save')
+        ->assertForbidden();
+
+    Volt::test('tiffin-purchases.purchase-manager')
+        ->call('confirmDelete', $purchase->id)
+        ->call('delete')
+        ->assertForbidden();
 });
