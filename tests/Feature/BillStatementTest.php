@@ -573,3 +573,176 @@ test('Total Paid includes advance payments, so Billed always reconciles to Paid 
     expect($outstanding)->toBe(50000.0);
     expect($billed - $paid)->toBe($outstanding);
 });
+
+test('search finds a bill by invoice number and never matches an un-invoiced row', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $matching = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'AAL-DBL-0925-01',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 500,
+        'invoice_id' => $matching->id,
+    ]);
+
+    $other = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'AAL-DBL-0825-01',
+        'period_start' => now()->subMonth()->startOfMonth()->toDateString(),
+        'period_end' => now()->subMonth()->endOfMonth()->toDateString(),
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->subMonth()->toDateString(),
+        'bill_amount' => 300,
+        'invoice_id' => $other->id,
+    ]);
+
+    // A pending (never-invoiced) row must never match a search, since it
+    // has no invoice number/id yet.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 999,
+    ]);
+
+    $this->actingAs($user);
+
+    $byNumber = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->set('search', '0925-01');
+
+    expect($byNumber->viewData('rows'))->toHaveCount(1);
+    expect($byNumber->viewData('rows')->first()->invoice->id)->toBe($matching->id);
+
+    $caseInsensitive = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->set('search', 'aal-dbl-0925');
+
+    expect($caseInsensitive->viewData('rows'))->toHaveCount(1);
+    expect($caseInsensitive->viewData('rows')->first()->invoice->id)->toBe($matching->id);
+});
+
+test('a row flags whether its bill has a signed copy on file, independent of payment status', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $signedButUnpaid = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'AAL-DBL-SIGNED-1',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'due',
+        'signed_copy_path' => 'signed-bills/test.jpg',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 500,
+        'invoice_id' => $signedButUnpaid->id,
+    ]);
+
+    $unsigned = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'AAL-DBL-UNSIGNED-1',
+        'period_start' => now()->subMonth()->startOfMonth()->toDateString(),
+        'period_end' => now()->subMonth()->endOfMonth()->toDateString(),
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->subMonth()->toDateString(),
+        'bill_amount' => 300,
+        'invoice_id' => $unsigned->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $rows = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->viewData('rows')
+        ->keyBy(fn ($row) => $row->invoice->id);
+
+    expect($rows[$signedButUnpaid->id]->hasSignedCopy)->toBeTrue();
+    expect($rows[$signedButUnpaid->id]->status)->toBe('due');
+    expect($rows[$unsigned->id]->hasSignedCopy)->toBeFalse();
+});
+
+test('the Signed badge is hidden once a bill is fully paid', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $paidAndSigned = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'AAL-DBL-PAID-1',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'signed_copy_path' => 'signed-bills/test.jpg',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 500,
+        'invoice_id' => $paidAndSigned->id,
+    ]);
+
+    $dueAndSigned = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'AAL-DBL-DUE-1',
+        'period_start' => now()->subMonth()->startOfMonth()->toDateString(),
+        'period_end' => now()->subMonth()->endOfMonth()->toDateString(),
+        'status' => 'due',
+        'signed_copy_path' => 'signed-bills/test2.jpg',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->subMonth()->toDateString(),
+        'bill_amount' => 300,
+        'invoice_id' => $dueAndSigned->id,
+    ]);
+
+    $this->actingAs($user);
+
+    // The underlying flag stays true either way — it's the badge that's
+    // conditionally hidden once paid, not the fact itself.
+    $component = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id);
+
+    $rows = $component->viewData('rows')->keyBy(fn ($row) => $row->invoice->id);
+    expect($rows[$paidAndSigned->id]->hasSignedCopy)->toBeTrue();
+
+    $component->assertSeeHtml('Signed');
+    $component->assertSee('AAL-DBL-DUE-1');
+
+    // A paid, signed-only company should render no "Signed" badge at all.
+    Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->set('statusFilter', 'billed')
+        ->set('search', 'PAID-1')
+        ->assertDontSee('Signed');
+});

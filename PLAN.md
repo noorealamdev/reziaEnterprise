@@ -2453,3 +2453,165 @@ financial totals; granting `job_entries.create` to Staff from Roles &
 Permissions immediately turned that same route into a 200 on the next
 request, with no cache/session issue. Checked dark mode and mobile
 (390×844) on the new Settings tabs.
+
+## Daily report & unbilled-statement alert emails (done, 2026-09-03)
+
+Two recurring emails to every active Super Admin (`role = super_admin`,
+`is_active = true`) — no new settings UI, since that recipient set is
+already fully derived from existing role/is_active data:
+
+- **Daily report** (`report:daily`, scheduled 8:00 PM Asia/Dhaka) — an
+  end-of-day snapshot: today's entry count/total, unbilled total/count,
+  outstanding (due) total, month-to-date total, and the "Ready to
+  Invoice" breakdown (same company+category grouping as the Dashboard).
+- **Unbilled statement alert** (`report:unbilled-alerts`, scheduled
+  9:00 AM Asia/Dhaka) — flags a company+category group once its oldest
+  unbilled entry is older than `config('reports.unbilled_alert_aging_days')`
+  (default 14, env-overridable, same pattern as `config/tiffin.php`).
+  Confirmed with the client: aging-only trigger (not dollar amount), and
+  re-sent once then weekly while unresolved rather than every day — a
+  new `unbilled_alerts` table (`company_id`, `service_category_id`,
+  `last_alerted_at`, unique together) tracks the dedup state via
+  `App\Models\UnbilledAlert`.
+
+Both commands send synchronously (`App\Mail\DailyReportMail` /
+`UnbilledAlertMail`, not `ShouldQueue`) since they only ever run from
+the scheduler — no web request is waiting — and there's no queue worker
+process configured in this deployment yet; queuing them would risk a
+silent no-op. Each recipient gets their own `Mail::to()->send()` call
+rather than one email addressed to all Super Admins together. Markdown
+mail views (`resources/views/mail/daily-report.blade.php`,
+`unbilled-alert.blade.php`) use Laravel's built-in `<x-mail::message>`/
+`<x-mail::table>`/`<x-mail::button>` components — no `vendor:publish`
+needed, no visual customization requested yet.
+
+`routes/console.php` registers both via `Schedule::command(...)
+->dailyAt(...)->timezone('Asia/Dhaka')` — this project's existing
+timezone convention (`.ai/rules/config.md`). Nothing in-app triggers
+the scheduler itself: the production/Coolify server needs a system cron
+entry (`* * * * * php artisan schedule:run`), a one-time deployment
+step outside this repo — recorded as a project memory so it isn't
+missed at deploy time.
+
+`tests/Feature/DailyReportTest.php` and `UnbilledAlertTest.php` (8 new
+tests, `Mail::fake()`) cover: recipients limited to active Super Admins
+only; report data accuracy (unbilled total spot-check); aging threshold
+(older entry alerts, younger doesn't); the once-then-weekly dedup
+(immediate re-run sends nothing, backdating `last_alerted_at` past the
+resend window sends again); a fully-billed group with a stale alert row
+never re-alerts; nothing sends with zero active Super Admins even if a
+group qualifies. 215 tests passing (up from 207).
+
+Manually ran both commands against the seeded dev DB
+(`MAIL_MAILER=log`) and read the rendered output in
+`storage/logs/laravel.log` to check formatting — caught and fixed two
+real bugs this way that the tests didn't: Carbon 3 changed `diffIn*`
+methods to return signed floats by default (Laravel 11/12 upgrade
+note), so the "Days" column was showing e.g. `-30.594185045081`
+instead of `31` — fixed by passing `absolute: true` and rounding to
+int; and the alert subject/body had a subject-verb agreement bug for
+the singular case ("1 group need/have invoicing") — fixed with an
+explicit singular/plural branch instead of relying on pluralization
+alone.
+
+## In-Charge now selects a real User account (done, 2026-09-03)
+
+In-Charge was previously a standalone lookup entity (`in_charges` table
+— name/phone, no login) that anyone could grow inline from the Job
+Entry form's "+ Add new in-charge…" option. The client asked for
+In-Charge to instead come from Users created via Settings — any active
+user regardless of role (not just Staff), since the client didn't want
+a role restriction.
+
+`in_charge_id` on `job_entries` now references `users.id`
+(`nullOnDelete()`, same as before) — folded directly into
+`create_job_entries_table` per the pre-launch migration convention,
+since `users` is already created earlier in migration order (no
+reordering needed, unlike the earlier `invoice_id` FK fix). The
+standalone `in_charges` table/model/factory/seeder are deleted
+entirely rather than kept unused. `JobEntry::inCharge()` now points at
+`App\Models\User`.
+
+The Job Entry form's inline "add new in-charge" flow (separate
+`addingInCharge`/`newInChargeName`/`newInChargePhone` properties, its
+own validation branch) is removed — In-Charge is strictly a dropdown of
+`User::where('is_active', true)` now, matching how the Tiffin
+batch-edit form already worked (it never had a quick-add). Creating a
+new In-Charge means creating a User via Settings → Users, same place
+Accountant/Staff accounts are created.
+
+`tests/Feature/JobEntryManagementTest.php`: replaced the "in-charge
+quick-add" test with one asserting In-Charge selects an existing active
+user, and added one confirming an inactive user's name never appears in
+the dropdown. 216 tests passing (up from 215).
+
+**Correction (same day)**: initially seeded "Mr. Monir"/"Sagor Vai" as
+real Staff-role User accounts in `JobEntrySeeder` so the demo data had
+someone to show as In-Charge. The client pointed out these two never
+actually had accounts created for them — the seed data was inventing
+placeholder logins that don't correspond to anyone the Super Admin
+actually set up. Reverted: `JobEntrySeeder` no longer creates or
+assigns any In-Charge; every seeded job entry's `in_charge_id` is null
+until a Super Admin creates a real account via Settings → Users and
+starts assigning it. This matches the actual intent — In-Charge should
+only ever list accounts that were deliberately created, never
+synthesized ones.
+
+## Bill Statement: search by invoice number (done, 2026-09-03)
+
+Added a search box (`resources/views/livewire/bill-statement/bill-statement.blade.php`)
+alongside the existing Company/Year/Month/Status filters, matching the
+`#[Url(as: 'q', history: true)] public string $search` +
+`updatingSearch(): void { $this->resetPage(); }` pattern already used by
+`companies/company-list.blade.php`.
+
+Search only ever matches invoiced rows — a case-insensitive substring
+match on `Invoice::invoice_number` (e.g. typing "AAL-DBL" or "0925"
+finds "AAL-DBL-0925-01"). A pending (not-yet-invoiced) row never
+matches, since it has no invoice number yet. Considered also matching
+the invoice's raw numeric primary key ("bill id" was in the original
+ask), but that id is never displayed anywhere in the app — the only
+identifier a user ever sees is the invoice number — so matching on it
+would let a short numeric search silently false-positive against
+unrelated invoice numbers that happen to contain the same digits (e.g.
+searching "1" would match both "...-0925-01" and "...-0825-01" via
+their trailing "-01"), without ever being something a user could
+intentionally type. Caught by the test before shipping, not by
+inspection — the first implementation attempt did exactly this and
+`BillStatementTest` failed with 2 matches instead of 1.
+
+`tests/Feature/BillStatementTest.php` gained one test: search matches
+by a substring of the invoice number (case-insensitive), and a pending
+row is never returned regardless of search term. 217 tests passing (up
+from 216).
+
+## Bill Statement: Signed indicator (done, 2026-09-03)
+
+Client wanted the Bill Statement to reflect that a bill was sent to the
+factory and signed, independent of payment status (a bill can be
+signed and still unpaid). Rather than add a new `sent_at` column and a
+"Mark as Sent" action, the existing `signed_copy_path` (already
+uploaded on the Invoice Detail page — see "Signed bill copy storage")
+is reused as the single source of truth: uploading a signed copy is
+itself proof the bill was sent, since one can't happen without the
+other in practice. No migration needed.
+
+Each Bill Statement row now carries a `hasSignedCopy` boolean
+(`invoice->signed_copy_path !== null`, always `false` for a pending/
+not-yet-invoiced row). Shown as a small "Signed" badge next to the
+existing Due/Partial/Paid status badge — kept as a separate badge
+rather than merged into one combined label, since payment status and
+signed status are independent facts (e.g. "Due" + "Signed" together
+means exactly what was asked for: sent, signed, still unpaid).
+
+`tests/Feature/BillStatementTest.php` gained one test confirming the
+flag is true only for an invoice with a signed copy on file, regardless
+of its payment status. 218 tests passing (up from 217).
+
+**Follow-up (same day)**: client asked that the Signed badge not show
+once a bill is fully Paid — its purpose is to flag "signed but still
+owed," which stops mattering once payment is complete. The underlying
+`hasSignedCopy` flag is untouched (still reflects the real fact), only
+the badge's render condition gained `&& $row->status !== 'paid'`. New
+test confirms a paid+signed invoice renders no "Signed" badge while a
+due+signed one still does. 219 tests passing (up from 218).

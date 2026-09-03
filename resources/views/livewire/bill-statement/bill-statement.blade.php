@@ -28,7 +28,15 @@ new class extends Component
     #[Url(as: 'status', history: true)]
     public string $statusFilter = '';
 
+    #[Url(as: 'q', history: true)]
+    public string $search = '';
+
     public function updatingCompanyFilter(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatingSearch(): void
     {
         $this->resetPage();
     }
@@ -82,6 +90,11 @@ new class extends Component
                     // + Total Outstanding always reconciles to Total Billed.
                     'paidAmount' => $advancePaid + $paidViaPayments,
                     'balanceDue' => max(0, $amount + $vatAmount - $advancePaid - $paidViaPayments),
+                    // A signed copy on file is proof the bill was both sent
+                    // to the factory and handed back signed — there's no
+                    // separate "sent" flag to track, since the two always
+                    // happen together in practice.
+                    'hasSignedCopy' => $invoice->signed_copy_path !== null,
                 ];
             });
 
@@ -112,6 +125,8 @@ new class extends Component
                     'invoice' => null,
                     'paidAmount' => $advancePaid,
                     'balanceDue' => max(0, $amount - $advancePaid),
+                    // Not yet invoiced — can't have been sent or signed.
+                    'hasSignedCopy' => false,
                 ];
             })
             ->values();
@@ -127,11 +142,20 @@ new class extends Component
         // from the dropdown.
         $availableYears = $allRows->map(fn ($row) => $row->period_start->year)->unique()->sortDesc()->values();
 
+        // Search only ever matches invoiced rows (a pending row has no
+        // invoice number yet to search by) — a substring, case-insensitive
+        // match on the invoice number, which is the only invoice identifier
+        // ever shown to a user anywhere in this app (the numeric primary
+        // key is never displayed, so it isn't something anyone could type).
+        $searchTerm = strtolower(trim($this->search));
+
         $rows = $allRows
             ->when($this->yearFilter, fn ($rows) => $rows->filter(fn ($row) => $row->period_start->year == $this->yearFilter))
             ->when($this->monthFilter, fn ($rows) => $rows->filter(fn ($row) => $row->period_start->month == $this->monthFilter))
             ->when($this->statusFilter === 'billed', fn ($rows) => $rows->filter(fn ($row) => $row->invoice !== null))
             ->when($this->statusFilter === 'unbilled', fn ($rows) => $rows->filter(fn ($row) => $row->invoice === null))
+            ->when($searchTerm !== '', fn ($rows) => $rows->filter(fn ($row) => $row->invoice !== null
+                && str_contains(strtolower($row->invoice->invoice_number), $searchTerm)))
             ->values();
 
         $totalBilled = (float) $rows->sum('amount');
@@ -181,6 +205,13 @@ new class extends Component
 <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3 print:hidden">
         <div class="flex flex-wrap items-center gap-3">
+            <x-text-input
+                type="search"
+                wire:model.live.debounce.400ms="search"
+                placeholder="Search by invoice number…"
+                class="w-full sm:w-64"
+            />
+
             <x-select-input wire:model.live="companyFilter" class="w-full sm:w-56">
                 <option value="">All companies</option>
                 @foreach ($companies as $company)
@@ -227,7 +258,7 @@ new class extends Component
         <x-empty-state
             :title="$hasUnfilteredRows ? 'No rows match these filters' : 'No billing activity yet'"
             :message="$hasUnfilteredRows
-                ? 'Try a different year, month or status — or clear the filters above.'
+                ? 'Try a different year, month, status or search — or clear the filters above.'
                 : ($selectedCompany
                     ? 'Log a job entry for this company to start its bill statement.'
                     : 'Once job entries are logged for any company, their bills will show up here.')"
@@ -301,9 +332,16 @@ new class extends Component
                                 <td class="px-4 py-3 text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ $row->period_start->format('F Y') }}</td>
                                 <td class="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200 print:px-2 print:py-1">{{ number_format($row->amount, 2) }}</td>
                                 <td class="px-4 py-3 print:px-2 print:py-1">
-                                    <x-badge color="{{ match ($row->status) { 'paid' => 'green', 'partial' => 'brand', 'due' => 'amber', default => 'slate' } }}" class="print:!bg-transparent print:!px-0 print:!text-slate-700">
-                                        {{ match ($row->status) { 'pending' => 'Not Invoiced', 'partial' => 'Partially Paid', default => ucfirst($row->status) } }}
-                                    </x-badge>
+                                    <div class="flex flex-wrap items-center gap-1">
+                                        <x-badge color="{{ match ($row->status) { 'paid' => 'green', 'partial' => 'brand', 'due' => 'amber', default => 'slate' } }}" class="print:!bg-transparent print:!px-0 print:!text-slate-700">
+                                            {{ match ($row->status) { 'pending' => 'Not Invoiced', 'partial' => 'Partially Paid', default => ucfirst($row->status) } }}
+                                        </x-badge>
+                                        @if ($row->hasSignedCopy && $row->status !== 'paid')
+                                            <x-badge color="slate" class="print:!bg-transparent print:!px-0 print:!text-slate-700" title="Sent to the factory and signed">
+                                                Signed
+                                            </x-badge>
+                                        @endif
+                                    </div>
                                 </td>
                                 <td class="px-4 py-3 text-right font-medium {{ $row->balanceDue <= 0 ? 'text-slate-400 dark:text-slate-500' : 'text-red-600 dark:text-red-400' }} print:px-2 print:py-1">
                                     {{ number_format($row->balanceDue, 2) }}
