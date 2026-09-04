@@ -21,6 +21,19 @@ new class extends Component
     #[Url(as: 'month', history: true)]
     public string $monthFilter = '';
 
+    /**
+     * Captured once in mount() — a manually-built LengthAwarePaginator needs
+     * an explicit 'path', and request()->url() would otherwise resolve to
+     * Livewire's own update endpoint on any re-render triggered by a filter
+     * change, not this page's real URL.
+     */
+    public string $paginationPath = '';
+
+    public function mount(): void
+    {
+        $this->paginationPath = request()->url();
+    }
+
     public function updatingCompanyFilter(): void
     {
         $this->resetPage();
@@ -39,9 +52,26 @@ new class extends Component
         $this->resetPage();
     }
 
+    /**
+     * Every #[Url]-bound filter, appended onto the pagination links —
+     * without this, clicking "Next" (a plain <a href>, not a wire:click)
+     * does a full page reload to a URL holding only the page number,
+     * silently resetting every filter back to its default.
+     *
+     * @return array<string, string>
+     */
+    private function urlQueryState(): array
+    {
+        return array_filter([
+            'company' => $this->companyFilter,
+            'year' => $this->yearFilter,
+            'month' => $this->monthFilter,
+        ], fn ($value) => $value !== '');
+    }
+
     public function with(): array
     {
-        $days = new LengthAwarePaginator([], 0, 15);
+        $days = new LengthAwarePaginator([], 0, 15, null, ['path' => $this->paginationPath]);
         $availableYears = collect();
 
         if ($this->companyFilter) {
@@ -70,13 +100,13 @@ new class extends Component
             // still tracking the total, the same way Job Entries/Tiffin
             // Purchases paginate their real Eloquent queries.
             $perPage = 15;
-            $days = new LengthAwarePaginator(
+            $days = (new LengthAwarePaginator(
                 $filteredDays->forPage($this->getPage(), $perPage)->values(),
                 $filteredDays->count(),
                 $perPage,
                 $this->getPage(),
-                ['pageName' => 'page']
-            );
+                ['pageName' => 'page', 'path' => $this->paginationPath]
+            ))->appends($this->urlQueryState());
         }
 
         $monthOptions = collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]);

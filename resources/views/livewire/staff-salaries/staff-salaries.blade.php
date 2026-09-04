@@ -22,8 +22,18 @@ new class extends Component
     #[Url(as: 'q', history: true)]
     public string $search = '';
 
+    /**
+     * Captured once in mount() — a manually-built LengthAwarePaginator needs
+     * an explicit 'path', and request()->url() would otherwise resolve to
+     * Livewire's own update endpoint on any re-render triggered by a filter
+     * change, not this page's real URL.
+     */
+    public string $paginationPath = '';
+
     public function mount(): void
     {
+        $this->paginationPath = request()->url();
+
         if ($this->period === '') {
             $this->period = now()->format('Y-m');
         }
@@ -46,6 +56,23 @@ new class extends Component
     public function updatingSearch(): void
     {
         $this->resetPage();
+    }
+
+    /**
+     * Every #[Url]-bound filter, appended onto the pagination links —
+     * without this, clicking "Next" (a plain <a href>, not a wire:click)
+     * does a full page reload to a URL holding only the page number,
+     * silently resetting every filter back to its default.
+     *
+     * @return array<string, string>
+     */
+    private function urlQueryState(): array
+    {
+        return array_filter([
+            'month' => $this->period,
+            'status' => $this->statusFilter,
+            'q' => $this->search,
+        ], fn ($value) => $value !== '');
     }
 
     public function with(): array
@@ -85,13 +112,13 @@ new class extends Component
         // $allRows is a computed collection, not a query, so it's paginated
         // by hand — same LengthAwarePaginator-around-a-slice convention
         // Daily Summary uses for its own computed day groupings.
-        $rows = new LengthAwarePaginator(
+        $rows = (new LengthAwarePaginator(
             $allRows->forPage($this->getPage(), self::PER_PAGE)->values(),
             $allRows->count(),
             self::PER_PAGE,
             $this->getPage(),
-            ['pageName' => 'page']
-        );
+            ['pageName' => 'page', 'path' => $this->paginationPath]
+        ))->appends($this->urlQueryState());
 
         return [
             'period' => $periodStart,

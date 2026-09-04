@@ -29,6 +29,19 @@ new class extends Component
 
     public ?int $confirmingDeleteId = null;
 
+    /**
+     * Captured once in mount() — a paginator built or re-resolved mid-session
+     * would otherwise take its path from request()->url(), which resolves to
+     * Livewire's own update endpoint during an AJAX re-render, not this
+     * page's real URL.
+     */
+    public string $paginationPath = '';
+
+    public function mount(): void
+    {
+        $this->paginationPath = request()->url();
+    }
+
     public function updatingYearFilter(): void
     {
         // A month only makes sense within a chosen year — clear it if the
@@ -131,7 +144,9 @@ new class extends Component
         $filteredTotal = (float) (clone $query)->sum('amount');
 
         return [
-            'expenses' => $query->orderByDesc('expense_date')->orderByDesc('id')->simplePaginate(10),
+            'expenses' => $query->orderByDesc('expense_date')->orderByDesc('id')->simplePaginate(10)
+                ->setPath($this->paginationPath)
+                ->appends(array_filter(['year' => $this->yearFilter, 'month' => $this->monthFilter])),
             'availableYears' => $availableYears,
             'monthOptions' => $monthOptions,
             'filteredTotal' => $filteredTotal,

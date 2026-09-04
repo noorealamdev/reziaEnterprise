@@ -25,7 +25,7 @@
 
                 <!-- Page Heading -->
                 @if (isset($header))
-                    <header class="border-b border-slate-200 bg-white px-4 py-4 dark:border-slate-800 dark:bg-slate-900 sm:px-6 print:hidden">
+                    <header class="shrink-0 border-b border-slate-200 bg-white px-4 py-4 dark:border-slate-800 dark:bg-slate-900 sm:px-6 print:hidden">
                         {{ $header }}
                     </header>
                 @endif

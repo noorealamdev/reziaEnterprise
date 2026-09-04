@@ -33,6 +33,19 @@ new class extends Component
 
     public ?int $confirmingDeleteId = null;
 
+    /**
+     * Captured once in mount() — a paginator built or re-resolved mid-session
+     * would otherwise take its path from request()->url(), which resolves to
+     * Livewire's own update endpoint during an AJAX re-render, not this
+     * page's real URL.
+     */
+    public string $paginationPath = '';
+
+    public function mount(): void
+    {
+        $this->paginationPath = request()->url();
+    }
+
     public function updatingCompanyFilter(): void
     {
         $this->resetPage();
@@ -109,7 +122,16 @@ new class extends Component
             ->when($this->statusFilter === 'unbilled', fn ($query) => $query->whereNull('invoice_id'))
             ->orderByDesc('entry_date')
             ->orderByDesc('id')
-            ->simplePaginate(10);
+            ->simplePaginate(10)
+            ->setPath($this->paginationPath)
+            ->appends(array_filter([
+                'company' => $this->companyFilter,
+                'category' => $this->categoryFilter,
+                'year' => $this->yearFilter,
+                'month' => $this->monthFilter,
+                'item' => $this->itemFilter,
+                'status' => $this->statusFilter,
+            ]));
 
         // All Tiffin entries for the same company/day belong under one
         // Tiffin card, regardless of department (Swing/Wash Worker are

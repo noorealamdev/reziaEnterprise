@@ -36,9 +36,18 @@ new class extends Component
 
     public bool $confirmingSignedCopyRemoval = false;
 
+    /**
+     * Captured once in mount() — a paginator built or re-resolved mid-session
+     * would otherwise take its path from request()->url(), which resolves to
+     * Livewire's own update endpoint during an AJAX re-render, not this
+     * page's real URL.
+     */
+    public string $paginationPath = '';
+
     public function mount(Invoice $invoice): void
     {
         $this->invoice = $invoice;
+        $this->paginationPath = request()->url();
     }
 
     /**
@@ -297,6 +306,7 @@ new class extends Component
             ->orderByDesc('paid_on')
             ->orderByDesc('id')
             ->simplePaginate(10)
+            ->setPath($this->paginationPath)
             ->through(fn ($payment) => (object) [
                 'id' => $payment->id,
                 'amount' => (float) $payment->amount,
@@ -424,7 +434,9 @@ new class extends Component
                 @endforeach
             </div>
 
-            {{ $payments->links('pagination::simple-tailwind') }}
+            <div class="mt-3">
+                {{ $payments->links('pagination::simple-tailwind') }}
+            </div>
         @endif
     </div>
 

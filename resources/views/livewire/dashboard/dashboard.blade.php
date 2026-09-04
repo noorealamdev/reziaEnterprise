@@ -216,36 +216,54 @@ new class extends Component
             ? $companies->firstWhere('id', (int) $this->profitCompanyFilter)
             : null;
 
-        $companyScopedEntries = JobEntry::with(['company', 'serviceCategory', 'invoice'])
-            ->when($this->profitCompanyFilter, fn ($query) => $query->where('company_id', $this->profitCompanyFilter))
-            ->get();
+        $companyScoped = JobEntry::query()
+            ->when($this->profitCompanyFilter, fn ($query) => $query->where('company_id', $this->profitCompanyFilter));
 
         // Offered years always reflect the whole history for this company
         // scope, not just what the current year/month filter leaves behind
         // — same convention as Bill Statement/Daily Summary's dropdowns.
-        $availableYears = $companyScopedEntries->map(fn (JobEntry $entry) => $entry->entry_date->year)->unique()->sortDesc()->values();
+        // select()->distinct() lets the database collapse the (many) repeat
+        // dates before they ever reach PHP, instead of pulling every row.
+        $availableYears = (clone $companyScoped)->select('entry_date')->distinct()->pluck('entry_date')
+            ->map(fn ($date) => $date->year)->unique()->sortDesc()->values();
 
-        $entries = $companyScopedEntries
-            ->when($this->profitYearFilter, fn ($rows) => $rows->filter(fn (JobEntry $entry) => $entry->entry_date->year == $this->profitYearFilter))
-            ->when($this->profitMonthFilter, fn ($rows) => $rows->filter(fn (JobEntry $entry) => $entry->entry_date->month == $this->profitMonthFilter))
-            ->values();
+        // whereYear()/whereMonth() compile to each database's own portable
+        // syntax (unlike a raw YEAR()/MONTH() expression), so this still
+        // works against SQLite in tests the same as MySQL in production.
+        $entries = (clone $companyScoped)
+            ->when($this->profitYearFilter, fn ($query) => $query->whereYear('entry_date', $this->profitYearFilter))
+            ->when($this->profitMonthFilter, fn ($query) => $query->whereMonth('entry_date', $this->profitMonthFilter));
 
-        $paidEntries = $entries->filter(fn (JobEntry $entry) => $entry->invoice?->status === 'paid');
+        $totals = (clone $entries)->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount) as cost')->first();
+        $totalBilled = (float) ($totals->billed ?? 0);
+        $totalCost = (float) ($totals->cost ?? 0);
 
-        $totalBilled = (float) $entries->sum('bill_amount');
-        $totalCost = (float) $entries->sum('cost_amount');
-        $totalPaidProfit = (float) $paidEntries->sum('profit_amount');
-        $totalPaidBilled = (float) $paidEntries->sum('bill_amount');
+        $paidEntries = (clone $entries)->whereHas('invoice', fn ($query) => $query->where('status', 'paid'));
+
+        $paidTotals = (clone $paidEntries)->selectRaw('SUM(profit_amount) as profit, SUM(bill_amount) as billed')->first();
+        $totalPaidProfit = (float) ($paidTotals->profit ?? 0);
+        $totalPaidBilled = (float) ($paidTotals->billed ?? 0);
 
         $groupBy = $selectedCompany ? 'service_category_id' : 'company_id';
 
-        $breakdownEligible = $paidEntries->groupBy($groupBy)
-            ->map(fn ($group) => [
-                'label' => $selectedCompany ? $group->first()->serviceCategory->name : $group->first()->company->name,
-                'company' => $selectedCompany ? null : $group->first()->company,
-                'billed' => (float) $group->sum('bill_amount'),
-                'cost' => (float) $group->sum('cost_amount'),
-                'profit' => (float) $group->sum('profit_amount'),
+        // Aggregated by the database (GROUP BY), not by loading every paid
+        // entry as a hydrated model (with 3 eager-loaded relations) and
+        // reducing in PHP — the old version scanned and hydrated the whole
+        // job_entries table on every dashboard render, unfiltered by
+        // default, which is fine at a handful of rows and ruinous once
+        // real usage builds up a real history.
+        $breakdownEligible = (clone $paidEntries)
+            ->select($groupBy)
+            ->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount) as cost, SUM(profit_amount) as profit')
+            ->groupBy($groupBy)
+            ->with($selectedCompany ? 'serviceCategory' : 'company')
+            ->get()
+            ->map(fn ($row) => [
+                'label' => $selectedCompany ? $row->serviceCategory->name : $row->company->name,
+                'company' => $selectedCompany ? null : $row->company,
+                'billed' => (float) $row->billed,
+                'cost' => (float) $row->cost,
+                'profit' => (float) $row->profit,
             ])
             ->sortByDesc('profit')
             ->values();

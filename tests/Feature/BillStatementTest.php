@@ -44,6 +44,37 @@ test('screen pagination never drops a row from the printed statement or the tota
     $component->assertSeeHtml('print:!table-row');
 });
 
+test('rows are ordered most recent period first', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    // Deliberately created oldest-first, so a naive "insertion order"
+    // result would fail this test just as easily as the old
+    // oldest-period-first sort would.
+    foreach ([5, 1, 3] as $monthsAgo) {
+        JobEntry::factory()->create([
+            'company_id' => $company->id,
+            'service_category_id' => $category->id,
+            'entry_date' => now()->startOfMonth()->subMonths($monthsAgo)->toDateString(),
+            'bill_amount' => 100,
+        ]);
+    }
+
+    $this->actingAs($user);
+
+    $rows = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->viewData('rows');
+
+    expect($rows)->toHaveCount(3);
+    expect($rows->pluck('period_start')->map(fn ($date) => $date->format('Y-m'))->values()->all())->toBe([
+        now()->startOfMonth()->subMonths(1)->format('Y-m'),
+        now()->startOfMonth()->subMonths(3)->format('Y-m'),
+        now()->startOfMonth()->subMonths(5)->format('Y-m'),
+    ]);
+});
+
 test('year, month and status filters narrow the rows and their totals', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();

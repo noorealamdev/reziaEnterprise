@@ -31,6 +31,19 @@ new class extends Component
     #[Url(as: 'q', history: true)]
     public string $search = '';
 
+    /**
+     * Captured once in mount() — a manually-built LengthAwarePaginator needs
+     * an explicit 'path', and request()->url() would otherwise resolve to
+     * Livewire's own update endpoint on any re-render triggered by a filter
+     * change, not this page's real URL.
+     */
+    public string $paginationPath = '';
+
+    public function mount(): void
+    {
+        $this->paginationPath = request()->url();
+    }
+
     public function updatingCompanyFilter(): void
     {
         $this->resetPage();
@@ -57,6 +70,25 @@ new class extends Component
     public function updatingStatusFilter(): void
     {
         $this->resetPage();
+    }
+
+    /**
+     * Every #[Url]-bound filter, appended onto the pagination links —
+     * without this, clicking "Next" (a plain <a href>, not a wire:click)
+     * does a full page reload to a URL holding only the page number,
+     * silently resetting every filter back to its default.
+     *
+     * @return array<string, string>
+     */
+    private function urlQueryState(): array
+    {
+        return array_filter([
+            'company' => $this->companyFilter,
+            'year' => $this->yearFilter,
+            'month' => $this->monthFilter,
+            'status' => $this->statusFilter,
+            'q' => $this->search,
+        ], fn ($value) => $value !== '');
     }
 
     public function with(): array
@@ -131,8 +163,17 @@ new class extends Component
             })
             ->values();
 
+        // Most recent period first — this is a live operating statement,
+        // not an archive, so the current month's activity should be the
+        // first thing visible instead of buried behind a full history of
+        // older, already-settled periods. Chained stable sorts (PHP 8's
+        // sort is stable) applied least-significant-first, so the final
+        // sortByDesc on period_start wins as the primary key while company
+        // and category stay alphabetical as tie-breakers within a period.
         $allRows = $invoiceRows->concat($pendingRows)
-            ->sortBy(fn ($row) => $row->period_start->format('Y-m-d').'-'.$row->company->name.'-'.$row->category->name)
+            ->sortBy(fn ($row) => $row->category->name)
+            ->sortBy(fn ($row) => $row->company->name)
+            ->sortByDesc(fn ($row) => $row->period_start)
             ->values();
 
         // Years offered in the filter always reflect what's actually there
@@ -175,13 +216,13 @@ new class extends Component
         // per-row hidden/print:!table-row toggle in the template below);
         // this paginator exists purely to drive that page number and the
         // page-link controls, not to slice the data itself.
-        $pagination = new LengthAwarePaginator(
+        $pagination = (new LengthAwarePaginator(
             [],
             $rows->count(),
             self::PER_PAGE,
             $this->getPage(),
-            ['pageName' => 'page']
-        );
+            ['pageName' => 'page', 'path' => $this->paginationPath]
+        ))->appends($this->urlQueryState());
 
         return [
             'companies' => $companies,
@@ -369,7 +410,7 @@ new class extends Component
                 </table>
             </div>
 
-            <div class="print:hidden">
+            <div class="mt-4 print:hidden">
                 {{ $pagination->links('pagination::simple-tailwind') }}
             </div>
         </div>

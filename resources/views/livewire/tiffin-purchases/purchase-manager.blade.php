@@ -57,6 +57,19 @@ new class extends Component
 
     public ?int $confirmingDeleteId = null;
 
+    /**
+     * Captured once in mount() — a paginator built or re-resolved mid-session
+     * would otherwise take its path from request()->url(), which resolves to
+     * Livewire's own update endpoint during an AJAX re-render (e.g.
+     * switching tabs), not this page's real URL.
+     */
+    public string $paginationPath = '';
+
+    public function mount(): void
+    {
+        $this->paginationPath = request()->url();
+    }
+
     public function updatingItemFilter(): void
     {
         $this->resetPage();
@@ -96,6 +109,28 @@ new class extends Component
     public function updatingSupplyMonthFilter(): void
     {
         $this->resetPage('supplyPage');
+    }
+
+    /**
+     * Every #[Url]-bound property this component has, appended onto both
+     * paginators' page links — without this, clicking "Next" (a plain
+     * <a href>, not a wire:click) does a full page reload to a URL holding
+     * only the page number, silently dropping the active tab and every
+     * other filter back to their defaults.
+     *
+     * @return array<string, string>
+     */
+    private function urlQueryState(): array
+    {
+        return array_filter([
+            'view' => $this->activeView,
+            'supply_item' => $this->supplyItemFilter,
+            'supply_year' => $this->supplyYearFilter,
+            'supply_month' => $this->supplyMonthFilter,
+            'item' => $this->itemFilter,
+            'year' => $this->yearFilter,
+            'month' => $this->monthFilter,
+        ], fn ($value) => $value !== '');
     }
 
     public function startCreate(): void
@@ -242,7 +277,9 @@ new class extends Component
                 ->when($this->monthFilter, fn ($query) => $query->whereMonth('purchase_date', $this->monthFilter))
                 ->orderByDesc('purchase_date')
                 ->orderByDesc('id')
-                ->simplePaginate(10),
+                ->simplePaginate(10)
+                ->setPath($this->paginationPath)
+                ->appends($this->urlQueryState()),
             'availableYears' => $availableYears,
             'monthOptions' => $monthOptions,
             'costAmountPreview' => (is_numeric($this->quantity) && is_numeric($this->cost_rate))
@@ -291,13 +328,13 @@ new class extends Component
             ->sortByDesc('date')
             ->values();
 
-        $supplyDays = new LengthAwarePaginator(
+        $supplyDays = (new LengthAwarePaginator(
             $allDays->forPage($this->getPage('supplyPage'), self::SUPPLY_PER_PAGE)->values(),
             $allDays->count(),
             self::SUPPLY_PER_PAGE,
             $this->getPage('supplyPage'),
-            ['pageName' => 'supplyPage']
-        );
+            ['pageName' => 'supplyPage', 'path' => $this->paginationPath]
+        ))->appends($this->urlQueryState());
 
         $scopeLabel = match (true) {
             (bool) $this->supplyYearFilter && (bool) $this->supplyMonthFilter => Carbon::create((int) $this->supplyYearFilter, (int) $this->supplyMonthFilter, 1)->format('F Y'),
