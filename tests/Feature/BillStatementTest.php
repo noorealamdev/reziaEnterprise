@@ -777,3 +777,50 @@ test('the Signed badge is hidden once a bill is fully paid', function () {
         ->set('search', 'PAID-1')
         ->assertDontSee('Signed');
 });
+
+test('the service category filter narrows the rows to just that category', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+    $diesel = makeServiceCategory('Diesel Oil Supply');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 500,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $diesel->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 300,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('bill-statement.bill-statement')
+        ->set('categoryFilter', (string) $labour->id);
+
+    $rows = $component->viewData('rows');
+    expect($rows)->toHaveCount(1);
+    expect($rows->first()->category->id)->toBe($labour->id);
+});
+
+test('selecting a single service category hides the redundant Category column', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('bill-statement.bill-statement')
+        ->set('categoryFilter', (string) $category->id)
+        ->assertDontSeeHtml('>Category<');
+});

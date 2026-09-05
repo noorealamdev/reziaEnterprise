@@ -3,6 +3,7 @@
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\JobEntry;
+use App\Models\ServiceCategory;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
 use Livewire\Attributes\Url;
@@ -18,6 +19,9 @@ new class extends Component
 
     #[Url(as: 'company', history: true)]
     public string $companyFilter = '';
+
+    #[Url(as: 'category', history: true)]
+    public string $categoryFilter = '';
 
     #[Url(as: 'year', history: true)]
     public string $yearFilter = '';
@@ -45,6 +49,11 @@ new class extends Component
     }
 
     public function updatingCompanyFilter(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatingCategoryFilter(): void
     {
         $this->resetPage();
     }
@@ -84,6 +93,7 @@ new class extends Component
     {
         return array_filter([
             'company' => $this->companyFilter,
+            'category' => $this->categoryFilter,
             'year' => $this->yearFilter,
             'month' => $this->monthFilter,
             'status' => $this->statusFilter,
@@ -94,6 +104,7 @@ new class extends Component
     public function with(): array
     {
         $companies = Company::orderBy('name')->get();
+        $categories = ServiceCategory::orderBy('sort_order')->get();
 
         $invoiceRows = Invoice::query()
             ->with(['company', 'serviceCategory'])
@@ -101,6 +112,7 @@ new class extends Component
             ->withSum('jobEntries as advancePaid', 'company_adv_payment')
             ->withSum('payments as paidViaPayments', 'amount')
             ->when($this->companyFilter, fn ($query) => $query->where('company_id', $this->companyFilter))
+            ->when($this->categoryFilter, fn ($query) => $query->where('service_category_id', $this->categoryFilter))
             ->get()
             ->map(function (Invoice $invoice) {
                 $amount = (float) $invoice->amount;
@@ -141,6 +153,7 @@ new class extends Component
             ->whereNull('invoice_id')
             ->with(['company', 'serviceCategory'])
             ->when($this->companyFilter, fn ($query) => $query->where('company_id', $this->companyFilter))
+            ->when($this->categoryFilter, fn ($query) => $query->where('service_category_id', $this->categoryFilter))
             ->get()
             ->groupBy(fn (JobEntry $entry) => $entry->company_id.'-'.$entry->service_category_id.'-'.$entry->entry_date->format('Y-m'))
             ->map(function ($entries) {
@@ -226,7 +239,9 @@ new class extends Component
 
         return [
             'companies' => $companies,
+            'categories' => $categories,
             'selectedCompany' => $this->companyFilter ? $companies->firstWhere('id', (int) $this->companyFilter) : null,
+            'selectedCategory' => $this->categoryFilter ? $categories->firstWhere('id', (int) $this->categoryFilter) : null,
             'rows' => $rows,
             'pagination' => $pagination,
             'hasUnfilteredRows' => $allRows->isNotEmpty(),
@@ -260,6 +275,13 @@ new class extends Component
                 @endforeach
             </x-select-input>
 
+            <x-select-input wire:model.live="categoryFilter" class="w-full sm:w-48">
+                <option value="">All categories</option>
+                @foreach ($categories as $category)
+                    <option value="{{ $category->id }}">{{ $category->name }}</option>
+                @endforeach
+            </x-select-input>
+
             <x-select-input wire:model.live="yearFilter" class="w-full sm:w-32">
                 <option value="">Every year</option>
                 @foreach ($availableYears as $year)
@@ -288,7 +310,7 @@ new class extends Component
                 </x-secondary-button>
             @endif
             @if ($selectedCompany)
-                <x-primary-button :href="route('invoices.create', ['company' => $selectedCompany->id])" wire:navigate>
+                <x-primary-button :href="route('invoices.create', array_filter(['company' => $selectedCompany->id, 'category' => $selectedCategory?->id]))" wire:navigate>
                     Generate Invoice
                 </x-primary-button>
             @endif
@@ -319,7 +341,12 @@ new class extends Component
             <div class="print:mt-3 print:flex print:items-end print:justify-between">
                 <div>
                     <h2 class="text-lg font-semibold text-slate-900 dark:text-white print:text-base">{{ $selectedCompany?->name ?? 'All Companies' }}</h2>
-                    <p class="text-sm text-slate-500 dark:text-slate-400 print:text-xs">Bill Statement</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 print:text-xs">
+                        Bill Statement
+                        @if ($selectedCategory)
+                            — {{ $selectedCategory->name }}
+                        @endif
+                    </p>
                 </div>
                 <p class="hidden text-xs text-slate-600 print:block">As of {{ now()->format('d-M-Y') }}</p>
             </div>
@@ -331,7 +358,9 @@ new class extends Component
                             @unless ($selectedCompany)
                                 <th class="px-4 py-2 print:px-2 print:py-1">Company</th>
                             @endunless
-                            <th class="px-4 py-2 print:px-2 print:py-1">Category</th>
+                            @unless ($selectedCategory)
+                                <th class="px-4 py-2 print:px-2 print:py-1">Category</th>
+                            @endunless
                             <th class="px-4 py-2 print:px-2 print:py-1">Invoice</th>
                             <th class="px-4 py-2 print:px-2 print:py-1">Period</th>
                             <th class="px-4 py-2 text-right print:px-2 print:py-1">Amount</th>
@@ -355,9 +384,11 @@ new class extends Component
                                 @unless ($selectedCompany)
                                     <td class="px-4 py-3 text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ $row->company->name }}</td>
                                 @endunless
-                                <td class="px-4 py-3 print:px-2 print:py-1">
-                                    <x-badge color="brand" class="print:!bg-transparent print:!px-0 print:!text-slate-700">{{ $row->category->name }}</x-badge>
-                                </td>
+                                @unless ($selectedCategory)
+                                    <td class="px-4 py-3 print:px-2 print:py-1">
+                                        <x-badge color="brand" class="print:!bg-transparent print:!px-0 print:!text-slate-700">{{ $row->category->name }}</x-badge>
+                                    </td>
+                                @endunless
                                 <td class="px-4 py-3 print:px-2 print:py-1">
                                     @if ($row->invoice)
                                         <a href="{{ route('invoices.show', $row->invoice) }}" wire:navigate class="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300 print:text-slate-800 print:no-underline dark:print:text-slate-800">
@@ -390,7 +421,7 @@ new class extends Component
                             </tr>
                         @endforeach
                     </tbody>
-                    @php $labelSpan = $selectedCompany ? 3 : 4; @endphp
+                    @php $labelSpan = 2 + ($selectedCompany ? 0 : 1) + ($selectedCategory ? 0 : 1); @endphp
                     <tfoot>
                         <tr class="bg-slate-50 dark:bg-slate-900/50 print:break-inside-avoid print:bg-transparent">
                             <td colspan="{{ $labelSpan }}" class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">Total Billed</td>
