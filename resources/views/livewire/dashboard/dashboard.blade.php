@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Company;
+use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\JobEntry;
 use Illuminate\Support\Carbon;
@@ -11,6 +12,8 @@ use Livewire\Volt\Component;
 new class extends Component
 {
     private const TREND_MONTHS = 6;
+
+    private const EXPENSE_TREND_DAYS = 14;
 
     private const BREAKDOWN_LIMIT = 8;
 
@@ -111,8 +114,44 @@ new class extends Component
             'todayEntries' => $todayEntries,
             'monthlyTrend' => $this->monthlyTrend(),
             'companyBreakdown' => $this->companyBreakdown(),
+            'dailyExpenseTrend' => $this->dailyExpenseTrend(),
             ...$this->profit(),
         ];
+    }
+
+    /**
+     * Daily expense totals for the last two weeks (including today), so a
+     * sudden spike or a quiet stretch is visible at a glance — the same
+     * "grouped in PHP by a real Carbon property, not a raw SQL date
+     * function" convention as monthlyTrend(), so this stays portable
+     * between MySQL (production) and SQLite (tests).
+     *
+     * @return Collection<int, array{label: string, total: float, pct: float}>
+     */
+    private function dailyExpenseTrend(): Collection
+    {
+        $days = collect(range(self::EXPENSE_TREND_DAYS - 1, 0))
+            ->map(fn (int $i) => now()->subDays($i)->startOfDay());
+
+        $expensesByDay = Expense::where('expense_date', '>=', $days->first()->toDateString())
+            ->get(['expense_date', 'amount'])
+            ->groupBy(fn (Expense $expense) => $expense->expense_date->format('Y-m-d'));
+
+        $rows = $days->map(function (Carbon $day) use ($expensesByDay) {
+            $total = (float) $expensesByDay->get($day->format('Y-m-d'), collect())->sum('amount');
+
+            return [
+                'label' => $day->format('d M'),
+                'total' => $total,
+            ];
+        });
+
+        $max = max(1.0, (float) $rows->max('total'));
+
+        return $rows->map(fn ($row) => [
+            ...$row,
+            'pct' => $this->barPercent($row['total'], $max),
+        ]);
     }
 
     /**
@@ -413,6 +452,33 @@ new class extends Component
             @endif
         </div>
     </div>
+
+    @can('expenses.view')
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Expenses — Last {{ $dailyExpenseTrend->count() }} Days</h3>
+                <span class="text-xs text-slate-500 dark:text-slate-400">Total: {{ number_format($dailyExpenseTrend->sum('total'), 2) }}</span>
+            </div>
+
+            @if ($dailyExpenseTrend->sum('total') <= 0)
+                <p class="py-8 text-center text-sm text-slate-400 dark:text-slate-500">No expenses recorded in this window.</p>
+            @else
+                <div class="flex h-40 items-end justify-between gap-1 sm:gap-2">
+                    @foreach ($dailyExpenseTrend as $day)
+                        <div class="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                            <div
+                                class="flex w-full max-w-8 flex-1 flex-col-reverse overflow-hidden rounded-md bg-slate-100 dark:bg-slate-700/40"
+                                title="{{ $day['label'] }} — {{ number_format($day['total'], 2) }}"
+                            >
+                                <div class="w-full bg-brand-500" style="height: {{ $day['pct'] }}%"></div>
+                            </div>
+                            <span class="text-center text-[10px] leading-tight text-slate-500 dark:text-slate-400">{{ $day['label'] }}</span>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endcan
 
     @can('dashboard.view_profit')
     <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">

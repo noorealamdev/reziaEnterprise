@@ -1,10 +1,14 @@
 <?php
 
 use App\Models\Company;
+use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\JobEntry;
+use App\Models\RolePermission;
 use App\Models\TiffinDepartment;
 use App\Models\User;
+use App\Permission;
+use App\UserRole;
 use Livewire\Volt\Volt;
 
 test('guests are redirected to login', function () {
@@ -475,4 +479,49 @@ test('profit breakdown switches from companies to categories once a single compa
 
     expect($breakdown['byCompany'])->toBeFalse();
     expect($breakdown['rows']->pluck('label')->all())->toBe(['Diesel Oil Supply', 'Daily Basic Labour']);
+});
+
+test('daily expense chart shows the window total across several days', function () {
+    $user = User::factory()->create();
+
+    Expense::factory()->create([
+        'expense_date' => now()->toDateString(),
+        'amount' => 500,
+    ]);
+    Expense::factory()->create([
+        'expense_date' => now()->subDays(3)->toDateString(),
+        'amount' => 250,
+    ]);
+
+    $this->actingAs($user)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertSee(now()->format('d M'))
+        ->assertSee('Total: 750.00', false);
+});
+
+test('daily expense chart excludes expenses older than the trend window', function () {
+    $user = User::factory()->create();
+
+    Expense::factory()->create([
+        'expense_date' => now()->subDays(20)->toDateString(),
+        'amount' => 10000,
+    ]);
+
+    $this->actingAs($user)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertSee('No expenses recorded in this window.');
+});
+
+test('a user without expenses view permission does not see the daily expense chart', function () {
+    $staff = User::factory()->staff()->create();
+    RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::DashboardView->value]);
+
+    Expense::factory()->create(['expense_date' => now()->toDateString(), 'amount' => 500]);
+
+    $this->actingAs($staff)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertDontSee('Last 14 Days');
 });
