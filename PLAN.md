@@ -2885,3 +2885,676 @@ Redesign, still zero new npm dependencies:
 
 No test changes needed — `HomepageTest.php`'s content assertions still
 matched the redesigned markup. Full suite still 253 passing.
+
+## ETP Eid Holiday: quantity removed, direct-entry amounts (done, 2026-09-05)
+
+Client pointed out ETP Eid Holiday (a one-off, advance-payment-based
+project — tank cleaning during Eid, not a per-unit job) shouldn't have a
+Quantity field at all — it only ever existed as a workaround (seed data
+had `quantity: 1` with the real total stuffed into `cost_rate`/
+`bill_rate` so the existing `quantity × rate` calculation would land on
+the right number).
+
+Confirmed with the client: Cost Rate/Bill Rate stay visible as
+free-standing fields (not removed), but Cost Amount/Bill Amount are now
+typed in directly for this category rather than auto-calculated —
+achieved with zero new branching in `recomputeAmounts()`, since it
+already only fires its `quantity × rate` calculation when
+`is_numeric($this->quantity)` is true. Setting `quantity` to `null`
+whenever the category is ETP Eid Holiday (on category-switch, and again
+defensively in `save()`, same pattern as `company_adv_payment`'s
+existing per-category reset) was the entire fix — the guard already in
+place did the rest. `job-entry-form.blade.php`: the Quantity field is
+now `x-show`-hidden for this one category, and the Cost/Bill Amount
+placeholders swap to "e.g. ... (total cost/bill)" instead of "Auto-filled
+from Quantity × ..." when it's selected.
+
+`JobEntrySeeder`'s ETP Eid Holiday demo entry updated to match — bypasses
+the shared `entry()` helper (which always computes `cost_amount`/
+`bill_amount` from `quantity × rate`) and sets `quantity: null` plus the
+cost/bill amounts directly, same as the form now does.
+
+3 new tests in `JobEntryManagementTest.php`: saving without a quantity
+persists correctly, switching into ETP Eid Holiday clears a quantity
+left over from a different category, and Cost/Bill Rate no longer drive
+Cost/Bill Amount for this category even when both are set. 257 tests
+passing (up from 254).
+
+## Bill Statement: Service Category filter (done, 2026-09-05)
+
+Added a Service Category dropdown alongside the existing Company/Year/
+Month/Status filters (`categoryFilter`, `#[Url(as: 'category')]`),
+filtering both the invoiced and pending-row queries the same way
+`companyFilter` already does. When exactly one category is selected, the
+now-redundant "Category" column (every visible row would show the same
+badge) hides from both the table header and each row — mirroring the
+existing `$selectedCompany`-hides-the-Company-column pattern exactly.
+`labelSpan` (the totals row's leading colspan) generalized from a
+company-only ternary to `2 + (company hidden ? 0 : 1) + (category hidden
+? 0 : 1)` to stay correct with either column independently shown/hidden.
+The print header's "Bill Statement" subtitle appends "— Category Name"
+when scoped to one category, matching how the company name already
+appears in the main heading. The header "Generate Invoice" button now
+also pre-fills `category` in its query params when one's selected, same
+as every per-row "Generate Invoice" link already does.
+
+2 new tests in `BillStatementTest.php`: the filter narrows rows to the
+selected category, and selecting one category hides the Category column
+header. 259 tests passing (up from 257).
+
+## Brand color: #303960 (done, 2026-09-05)
+
+Client supplied `#303960` (a muted navy) as Rezia Enterprise's primary
+brand color, replacing the previous vivid indigo/purple palette. Converted
+to OKLCH (`L 35.6% C 0.069 H 272.6`, verified via round-trip conversion
+using the standard OKLab matrices) and placed exactly on `brand-600` in
+`resources/css/app.css` — the shade every primary button, link, and focus
+ring across the app actually renders, since that's the one users judge as
+"the brand color."
+
+The old ramp's lightness curve couldn't be reused as-is: `#303960` is
+much darker than the old brand-600 (35.6% vs 51.1%), so keeping the old
+absolute lightness values per step would have put 600 darker than 700/800
+(non-monotonic, broken). Fix: kept the pale tints (50-400) unchanged
+(they're just light backgrounds, independent of the anchor hue), then
+bridged down to the exact target at 500 (geometric mean of old 400 and
+the target lightness) and continued the same multiplicative decay for
+700-950, so the whole dark half of the ramp shares one consistent
+contrast ratio. Chroma at every non-anchor step scales by its existing
+ratio-to-600, keeping the same "how saturated is this step" shape as
+before. Hue held constant at 272.6° throughout (no per-step hue drift).
+
+Also fixed two places with the brand color hardcoded outside the
+`--color-brand-*` tokens, missed by the palette swap: the fallback logo
+SVG (`application-logo.blade.php`, shown whenever no logo has been
+uploaded) and `public/favicon.svg`, both previously `fill="#4F46E5"`, now
+`fill="#303960"`. Updated the one test that asserted the old fallback
+hex (`SettingsManagementTest.php`).
+
+Verified visually via Playwright/Chromium screenshots of the homepage in
+light and dark mode, and via computed-style inspection of the CTA
+section's gradient (confirmed `oklch(0.356 ...)` → `oklch(0.188 ...)`,
+not a stale cached stylesheet). `npm run build` succeeded. 259 tests
+still passing — this was a CSS/asset-only change plus one string-literal
+fix, no new behavior to test beyond the existing fallback-logo test.
+
+## Tiffin Summary report: Daily/Weekly/Monthly (done, 2026-09-05)
+
+New page (`/tiffin-summary`, sidebar link under Daily Summary, gated by
+the existing `daily_summary.view` permission — same data domain, no new
+permission needed) showing Tiffin activity in the same department-batched
+table style as the Daily Summary detail page's Tiffin section (one row
+per department, e.g. "Swing — Banana, Bread, Egg", with Quantity/Cost
+Rate/Bill Rate/Cost/Bill/Profit columns and a Subtotal/Grand Total row),
+but selectable across three periods — Daily, Weekly, Monthly — instead of
+being locked to a single day.
+
+For Weekly/Monthly, each department's daily batch is computed the same
+way the existing Daily Summary page already does (Egg is the only
+billing item; headcount = bill ÷ Egg's bill_rate), then those per-day
+batches are summed across every day in the period — headcount, cost, and
+bill all sum, while the displayed Cost Rate/Bill Rate become the period's
+blended per-person rate (total cost or bill ÷ total headcount). Prev/Next
+buttons step the reference date by one day/week/month depending on the
+active period; a date picker jumps directly.
+
+Real bug caught by the new tests, not just a test-environment quirk in
+the strict sense but a query-correctness issue: the month/week range
+query originally used `whereBetween('entry_date', [$start->toDateString(),
+$end->toDateString()])`. In SQLite (the test suite's driver), a `date`-cast
+column can be stored with a `00:00:00` time suffix, which string-sorts
+*after* the bare end-of-range date string, so the boundary day silently
+dropped out of the range (verified by hand: `'2026-08-31 00:00:00' <=
+'2026-08-31'` is false). Fixed by switching to `whereDate('entry_date',
+'>=', $start)->whereDate('entry_date', '<=', $end)`, the same
+engine-agnostic pattern already used for the single-day case elsewhere in
+this codebase.
+
+`JobEntrySeeder` extended to seed Tiffin entries for every day from the
+start of the current month through today (previously only 2-3 fixed
+days), cycling headcounts through a small fixed pattern per department,
+so the new Weekly/Monthly views have more than a couple of days to
+actually aggregate when demoed against seed data.
+
+6 new tests in `TiffinSummaryTest.php`: guest redirect, daily period
+shows one day only, weekly sums a department's batches across the week
+(and excludes the following week), monthly sums across the whole month
+(and excludes the next month), Prev/Next navigation steps the reference
+date correctly per period, and non-Tiffin entries are excluded entirely.
+265 tests passing (up from 259).
+
+Corrected after client feedback: the first version collapsed Weekly/
+Monthly into one summed row per department for the *entire* period,
+losing the day-by-day detail. Reworked so every day in the range keeps
+its own department rows (day header → department rows → day subtotal),
+matching the Daily view exactly, just repeated for each day the period
+covers — Weekly/Monthly now differ from Daily only in how many days are
+listed, not in how the data is shown. Tests updated to assert day headers
+appear in date order with each day's own headcount/bill, rather than one
+blended total for the week/month.
+
+`JobEntrySeeder`'s Tiffin window widened again, from "start of this month
+through today" to a full trailing 30 days (`today->subDays(29)` through
+today), per the client's explicit ask for "30 days" of Tiffin data for
+Ananta Apparels Ltd — this no longer depends on how far into the month
+"today" happens to be. Reseeded: 30 distinct days, 180 Tiffin entries
+(30 days × 2 departments × 3 items).
+
+The day list itself had no pagination at all — an unbounded Monthly view
+rendered every day's rows on one page with no page-size limit at all (a
+latent problem for a Weekly/Monthly range longer than one calendar
+month, even though the UI doesn't currently offer one). Added the same
+manually-built `LengthAwarePaginator` + captured `paginationPath` pattern
+already used by Daily Summary's day list and Bill Statement, with
+`resetPage()` wired into every filter mutation (company, period,
+reference date, Prev/Next).
+
+Page size is 31, not a rounder number like 10 or 30 — the client wants a
+full month visible on one page without paging through it, and 30 would
+still split the five 31-day calendar months onto a second page for just
+one leftover day. 31 is the actual maximum a calendar month can be, so
+every month now always renders as a single page.
+
+Grand Total is computed from the full period's days *before* slicing to
+the current page, so it never understates the period total the way a
+paginated-then-summed total would — same principle already applied to
+Invoice payment history and Staff Salaries earlier in this project.
+
+2 new tests: every day of a 31-day month (the longest possible) renders
+on a single page with the Grand Total covering all 31 days, and changing
+any filter resets pagination back to page 1. 267 tests passing (up from
+265).
+
+## Egg stock management & external sales (done, 2026-09-05)
+
+Client's business now includes an Egg-specific angle beyond internal
+Tiffin supply: they buy eggs in bulk (already tracked via the existing
+Tiffin Purchases page), consume some internally through Tiffin batches
+(already tracked via job_entries), and also **sell surplus eggs to
+outside buyers** — a new revenue stream with no existing tracking at all.
+Client confirmed Egg-specific scope (not a generalized multi-item
+inventory system) after weighing the tradeoff.
+
+New `egg_sales` table (`sale_date`, `quantity`, `sale_rate`,
+`sale_amount`, `buyer_name`, `remarks`, `created_by`) and `EggSale`
+model — deliberately standalone, not tied to `tiffin_items`/
+`tiffin_item_purchases`, since this is Egg-only by design and doesn't
+need a generic item reference. No unique constraint on date (unlike
+purchases' one-bulk-buy-per-day rule) since multiple buyers in a day is
+realistic.
+
+Stock is a **computed** balance, not a stored running counter — avoids
+ledger drift/consistency bugs a mutable counter would risk. `eggInStock`
+= `TiffinItemPurchase` quantity summed for the Egg item, minus
+`JobEntry` quantity summed where `supply_type = 'Egg'` and
+`tiffin_department_id` is not null (this already includes the fixed
+spoilage buffer on top of headcount — `config('tiffin.egg_buffer_quantity')`
+— so it's the real number of eggs sent out, not just the billed
+headcount), minus `EggSale` quantity summed. All three figures plus the
+net stock and total sale revenue render as a 4-card summary strip.
+
+Extended the existing "Tiffin Purchases" page (renamed in-page to "Egg
+Stock & Purchases") rather than building a separate page, since the
+purchase/consumption/sales figures only mean something viewed together
+and the page was already Egg-specific in practice ("Only Egg's cost
+fluctuates day to day..."). Added a third "Sales" tab alongside
+Purchases and Supply by Item, with its own record/edit/delete flow
+mirroring the Purchases tab's modal-based CRUD exactly, and its own
+year/month filter + pagination (`salesPage`, separate from Supply's
+`supplyPage`).
+
+New `egg_sales.view` / `.create` / `.modify` permissions (own group,
+"Egg Sales") rather than folding into `tiffin_purchases.*` — buying
+(cost) and selling (revenue) are different money flows a business may
+want to gate to different people, matching this app's existing
+one-permission-per-money-moving-action philosophy (Payments/Invoices/
+Expenses are already separate groups despite living on related pages).
+The Sales tab button, "+ Record Sale", the 4-card stock summary, and the
+Sales tab's content are all individually gated by `@can('egg_sales.*')`
+inside the shared component — the route itself stays gated on the
+existing `tiffin_purchases.view` (whoever reaches this page at all can
+still see Purchases/Supply; only Egg Sales specifics need the extra
+grant). `Gate::authorize()` guards `saveSale()`/`deleteSale()` same as
+every other mutating method in this app.
+
+9 new tests in `EggStockManagementTest.php`: stock summary nets
+purchases/consumption/sales correctly (and ignores a same-named
+non-Tiffin job entry), recording/editing/deleting a sale, required-field
+validation, year/month filtering (+ incompatible-month-clears-on-year-
+change), a user without `egg_sales.*` sees neither the Sales tab nor the
+stock summary, and an accountant with only `egg_sales.create` gets 403
+trying to edit or delete a sale. 276 tests passing (up from 267).
+
+New `EggStockSeeder` (added to `DatabaseSeeder`, after `JobEntrySeeder`)
+demos the whole purchase/consume/sell cycle: 10 Egg purchases (~every 3
+days, 2 alternating suppliers) and 5 external sales (2 alternating
+buyers) across the same trailing-30-day window `JobEntrySeeder` already
+uses for Tiffin entries. Purchased (2,800) comfortably exceeds Tiffin's
+own consumption (2,083) plus these sales (450), landing "In Stock Now"
+on a small positive number (267) rather than zero/negative. Keyed by
+`updateOrCreate` (purchases on item+date, sales on date+buyer) so
+re-running the seeder without a fresh migration doesn't duplicate rows —
+verified by running `db:seed --class=EggStockSeeder` twice and confirming
+row counts stayed at 10/5.
+
+## Purchase memo upload (done, 2026-09-05)
+
+Client receives a physical purchase memo/receipt from the egg supplier
+and wants a photo/scan of it attached when recording that purchase, so
+it can be pulled up later without digging through paper records — same
+need `signed_copy_path` already serves for invoices, applied here to
+purchases instead.
+
+Folded a nullable `memo_path` column into the existing
+`create_tiffin_item_purchases_table` migration (pre-launch convention).
+`TiffinItemPurchase` gained `memoUrl`/`memoIsPdf` computed attributes
+(mirroring how `Invoice` exposes `signedCopyUrl`/`signedCopyIsPdf` in
+`invoice-detail.blade.php`, just as model accessors here instead of
+component-level view data, since purchases render many rows per page
+rather than one).
+
+The purchase form (`purchase-manager.blade.php`) gained a file input
+(`memoFile`, `WithFileUploads`, `mimes:jpg,jpeg,png,pdf`, max 10MB) using
+the same raw `<input type="file">` + Tailwind `file:` utility markup
+`invoice-detail.blade.php` already established — deliberately not
+`x-text-input`, which styles for text inputs and doesn't fit a native
+file picker. Three states handled in `save()`: a new file replaces and
+deletes the old one from storage; "Remove" (`clearMemo()`) clears the
+path and deletes the file without requiring a replacement; touching
+neither leaves the existing `memo_path` untouched (achieved by simply
+never adding the key to `$validated` in that case, so the update() call
+doesn't overwrite it). `delete()` on the purchase itself also deletes its
+memo file, so removing a purchase doesn't leave an orphaned upload behind.
+Each purchase row in the list shows a small "View Memo" link (or "View
+Memo (PDF)") when one exists.
+
+No new permission — uploading a memo is just part of recording/editing a
+purchase, gated the same as the rest of that action
+(`tiffin_purchases.create`/`.modify`), unlike Egg Sales which got its own
+permission group for a genuinely distinct concern.
+
+6 new tests in `TiffinPurchaseManagementTest.php`: uploading a memo
+persists it, a non-image/PDF file is rejected, editing without choosing
+a new file keeps the existing memo untouched, choosing a new file while
+editing deletes the old one and stores the new one, removing a memo
+without a replacement clears it and deletes the file, and deleting a
+purchase deletes its memo file too. 282 tests passing (up from 276).
+
+## Simba Fashion & Company Purchases (done, 2026-09-05)
+
+New client fact: **Simba Fashion** is unusual — it's a normal client like
+Ananta Apparels (receives Tiffin and other services, gets invoiced and
+owes Rezia money the regular way) but Rezia *also* buys goods from Simba,
+a reversed money flow with no existing tracking. Client confirmed via
+two scoping questions before this was built: (1) Simba should be a
+normal `Company` record, not a separate "vendor" concept, since it
+genuinely receives services too; (2) what Rezia owes Simba for goods
+must **never** be automatically netted against what Simba owes on its
+own invoices — kept as two independent, separately-viewable figures.
+If Simba ever settles its invoice using the value of goods sold to
+Rezia, that's a manual entry via the existing Payment-recording flow on
+the invoice (with a remark noting the offset), not something this
+feature calculates or enforces.
+
+Added `Company::updateOrCreate(['code' => 'SIMBA'], ['name' => 'Simba
+Fashion', ...])` to `CompanySeeder` (synced to every service category
+and Tiffin department, same as Ananta) rather than creating it ad hoc,
+so it's durable across `migrate:fresh --seed` like every other real
+business fact in this app's seed data.
+
+New **Company Purchases** feature (`/company-purchases`, its own
+sidebar link, plus a "Goods Purchased From Them" button on the Company
+Detail page linking here pre-filtered to that company): a `company_id`-
+scoped purchase ledger — company, date, free-text description ("what
+was purchased", since goods vary unlike Tiffin's fixed Egg/Banana/Bread
+catalog), optional quantity/rate that auto-fill Amount when both are
+numeric, memo upload (identical pattern to the Egg purchase memo work
+above — same file, same delete-on-replace/delete-on-purchase-delete
+rules), year/month filtering, and a "Total Purchased" figure computed
+from the full filtered set before pagination (never just the visible
+page). New `company_purchases.view`/`.create`/`.modify` permissions —
+own group, same reasoning as Egg Sales: a distinct money flow (what
+Rezia owes a company) deserves its own gate separate from
+`companies.*`.
+
+12 new tests in `CompanyPurchaseManagementTest.php`: recording a
+purchase, quantity×rate auto-fills amount while a lump-sum entry with
+neither still validates, required-field validation, company/year/month
+filtering (+ total reflects the filtered set, not just one company),
+incompatible-month-clears-on-year-change, editing, deleting, memo
+upload, memo deleted when its purchase is deleted, and an accountant
+with only `.create` gets 403 editing/deleting. 294 tests passing (up
+from 282).
+
+## Bill Adjustment: settle an invoice against a Company Purchase (done, 2026-09-05)
+
+Client's concrete example: Rezia buys a garment lot from Simba for
+500,000 Taka (a `CompanyPurchase`) and separately bills Simba 450,000 of
+Tiffin (an `Invoice`) — instead of Simba paying that invoice in cash,
+Simba settles it by adjusting the invoice against the purchase bill
+(identified by its own bill number), leaving 50,000 of the purchase
+bill's value unused, to be drawn down later. This is a *manual,
+one-at-a-time* mechanism, not automatic netting — the earlier decision
+this session (never automatically net a company's purchases against its
+invoice balance) still holds; the office explicitly picks "Bill
+Adjustment" and a specific purchase bill each time, same as picking
+"Cash" and typing a check number today.
+
+Researched the existing Invoice/Payment system before touching it (real
+money logic, real client): `invoice_payments` had zero payment-type
+concept — every row implicitly cash/check. Invoice balance/status is
+recomputed independently in 5 places (`invoice-detail.blade.php`'s
+`refreshInvoiceStatus()` and `with()`, `bill-statement.blade.php`,
+`dashboard.blade.php`, `SendDailyReport.php`), all by summing
+`payments().sum('amount')` with no shared accessor. This meant adding a
+`type` column to the *existing* `invoice_payments` table (rather than a
+parallel table) was the safe choice — an adjustment counts toward "paid"
+automatically everywhere cash already does, with zero changes needed to
+the other 4 call sites.
+
+Schema: folded `bill_number` (nullable string) into `company_purchases`,
+and `type` (string, default `'cash'`) + `company_purchase_id` (nullable,
+`restrictOnDelete`) into `invoice_payments` — both existing pre-launch
+migrations. Had to re-timestamp `create_company_purchases_table` from
+`2026_09_05_164115` to `2026_09_01_000001` so it runs *before*
+`create_invoice_payments_table` (`2026_09_01_152448`), since the new FK
+needs that table to already exist — same reordering technique already
+documented in `.ai/rules/migrations.md` for `job_entries.invoice_id`.
+
+`CompanyPurchase` gained `adjustments()` (hasMany `InvoicePayment`) and a
+computed `remainingBalance` attribute (amount minus every adjustment ever
+recorded against it) — live-computed, not a stored counter, matching the
+same anti-drift principle as Egg's `eggInStock`. `InvoicePayment` gained
+`companyPurchase()`.
+
+`invoice-detail.blade.php`: the "Record Payment" form gained a "Payment
+Type" selector (Cash / Bill Adjustment) that **only appears when the
+invoice's company actually has a purchase bill with remaining balance**
+(and the viewing user has `company_purchases.view`) — so this is
+Simba-only today purely because Simba is the only company with such a
+purchase, never a hardcoded company check. Choosing Bill Adjustment
+swaps the check/bank/screenshot fields for a purchase-bill picker
+(labeled by bill number, showing its remaining balance) and validates
+the amount against that specific purchase's live remaining balance, plus
+that the purchase belongs to the same company as the invoice. No new
+permission — recording an adjustment is still gated by the existing
+`payments.create`/`.modify`.
+
+Explicitly **out of scope**, flagged to the client in the plan before
+building: tracking cash Rezia pays Simba directly for a purchase bill
+itself (only "purchase bill used to offset an invoice" was requested).
+
+7 new tests in `BillAdjustmentTest.php`: adjustment reduces both the
+invoice balance and the purchase's remaining balance (reproducing the
+client's exact 500k/450k/50k example), amount capped at the purchase's
+remaining balance, adjustment against a different company's purchase is
+rejected, the option is absent entirely for a company with no eligible
+purchase, a fully-consumed purchase drops out of the option list,
+deleting an adjustment restores the purchase's remaining balance, and a
+partial cash payment plus a partial adjustment on the same invoice both
+count toward `status = 'paid'`. Plus 1 new test confirming `bill_number`
+round-trips through the Company Purchases form. 302 tests passing (up
+from 294).
+
+New `SimbaFashionSeeder` (added to `DatabaseSeeder`, after
+`EggStockSeeder`) demos the whole story end to end so it's visible
+without manual data entry. `status`/`paid_at` are set via a private
+`refreshInvoiceStatus()` mirroring `invoice-detail.blade.php`'s own
+method exactly, since seeding payments directly (bypassing the Livewire
+form) doesn't trigger it automatically — confirmed via the earlier
+research that these are plain stored columns with no model event.
+
+Revised after client feedback ("make it different amounts so we can see
+how much they owe us and how much we owe them") — the first version's
+adjustment fully consumed the invoice (0 owed by Simba), which only
+showed one side of the relationship at a time. Now: **Invoice #1** (last
+month, 600,000) is only *partially* settled by a 350,000 Bill Adjustment
+against the **Garment Lot purchase bill** (`SF-2026-01`, 500,000) —
+deliberately not netted or fully consumed, so both distinct, independent
+balances are visible at once: Simba still owes Rezia **250,000** on the
+invoice, and Rezia still owes Simba **150,000** on the purchase bill.
+**Invoice #2** (current month, 45,000) is separately paid 15,000 in
+cash, due 30,000 — the other settlement path, same company, side by
+side. Plus one more unbilled entry (18,000) so "ready to invoice" is
+also visible.
+
+Real bug caught while doing this revision: the unbilled entry's
+`entry_date` used `$today` directly, which happened to collide with a
+day already used by Invoice #2's own entry (both landed on the same
+date) — since `JobEntry::updateOrCreate()` matches on
+company/category/date, the second call silently overwrote the first
+instead of creating a distinct row, leaving Invoice #2 with zero linked
+job entries. Caught by directly querying `job_entries` after seeding and
+noticing only 4 rows existed where 5 were expected, not by a test (this
+is seed data, not app code).
+
+That fix (falling back to the previous day on collision) turned out to
+be a patch over a fragile pattern, not a real solution — `updateOrCreate`
+across a growing set of dated rows is inherently collision-prone as more
+data gets layered in over multiple sessions. Client then asked for a
+fuller dataset ("remove all Simba dummy data, and refill... multiple
+bills and payment, so I can see the complete picture"), which was the
+right moment to fix this properly: **rewrote the seeder to wipe every
+existing Simba record first** (`InvoicePayment` → `JobEntry` → `Invoice`
+→ `CompanyPurchase`, in FK-safe order) and rebuild entirely with plain
+`create()` calls instead of `updateOrCreate` — removing the whole bug
+class rather than patching around one instance of it, and guaranteeing
+the seeder always leaves exactly the described dataset regardless of
+what a prior run left behind.
+
+Final dataset — 3 purchase bills and 4 invoices spanning June–September
+2026, covering every status and settlement path at once:
+- **Purchase bills** (what Rezia owes Simba): Garment Lot 500,000 (350,000
+  drawn down, 150,000 left), Fabric Rolls 220,000 (untouched, fully
+  owed), Trims & Accessories 90,000 (fully consumed, 0 left).
+- **Invoice #1** (June, 700,000): settled by *three* payments on one
+  bill — two different Bill Adjustments (350,000 against Garment Lot,
+  90,000 against Trims & Accessories) plus 260,000 cash for the
+  remainder — status Paid.
+- **Invoice #2** (July, 300,000): no payments at all — status Due.
+- **Invoice #3** (August, 150,000): 50,000 paid in cash — status
+  Partially Paid, 100,000 due.
+- **Invoice #4** (September, 120,000): fully paid in cash, no adjustment
+  involved — the plain baseline case — status Paid.
+- One more unbilled entry (22,500) this month.
+
+Net result, visible without any arithmetic: **Simba owes Rezia 400,000**
+(300,000 + 100,000 across the two open invoices) and, completely
+independently, **Rezia owes Simba 370,000** (150,000 + 220,000 across
+the two open purchase bills) — two distinct, never-netted figures, which
+was the whole point of this feature. Verified every number directly
+against the database (invoice totals, payment types/amounts, purchase
+remaining balances) before handing back, and confirmed no duplicate or
+colliding job entries.
+
+**Simplified after client feedback** — the 4-invoice/3-purchase version
+was too much to follow ("there is nothing I can understand"). Stripped
+`SimbaFashionSeeder` down to the absolute minimum needed to see the
+mechanism: one purchase, one invoice, one adjustment payment.
+
+**Then rebuilt again once the client re-explained the real operational
+scenario from scratch** (asked me to "forget" the prior model and
+re-describe it in their own words first, before touching code): Rezia
+buys garment lots from Simba at *different times* — each purchase is
+its own record, not one lump sum, "so we get a better picture of the
+purchases." Simba settles most bills via adjustment against these
+purchases (one purchase can cover more than one bill), but does still
+pay some bills by plain check. This confirmed the already-built data
+model (individual `CompanyPurchase` rows + `InvoicePayment.type`/
+`company_purchase_id`) was exactly right — nothing structural changed,
+only the seed data, to actually depict this real arrangement instead of
+a toy example.
+
+Final `SimbaFashionSeeder`: **2 individual purchases** — "Garment Lot —
+Batch 1" (200,000, June) and "Batch 2" (300,000, July) — and **5 bills**
+across June–September, deliberately reproducing the client's own
+phrasing ("pay 200,000 for 2 bills... rest still due... pay check for a
+couple of bills"):
+
+- Bill 1 (June, 80,000) + Bill 2 (June, 120,000): both adjusted against
+  Batch 1 — 80,000 + 120,000 = 200,000, using it up exactly. Both Paid.
+- Bill 3 (July, 150,000): only 100,000 adjusted against Batch 2 —
+  50,000 still due on the bill, 200,000 still unused on the purchase.
+- Bill 4 (August, 90,000): paid in full by plain check — no adjustment.
+- Bill 5 (September, 60,000): paid 40,000 by check — 20,000 still due.
+
+End state, verified directly against the database: **Simba owes Rezia
+70,000** (the two still-due bills, 50,000 + 20,000) and, independently,
+**Rezia owes Simba 200,000** (what's left of Batch 2 — Batch 1 is fully
+used up). A realistic mix of settlement methods (adjustment splitting
+across bills, adjustment leaving a remainder on both sides, plain check
+in full, plain check partial) across several bills and purchases at
+once, not a single toy example.
+
+## Payment Type: split "Cash" into Cash / Check / Adjustment (done, 2026-09-06)
+
+Client wants three distinct payment types on every invoice, not two —
+`invoice_payments.type` already existed as a plain string column (no
+enum constraint), so this was purely an application-level change, no
+migration needed.
+
+Previously "Cash" was really "cash-or-check-combined" — the form always
+showed optional check number/bank/screenshot fields whenever the type
+wasn't an adjustment. Now: **Cash** has no check fields at all, **Check**
+has them (still optional — a check with no recorded number is valid),
+**Bill Adjustment** unchanged. `recordPayment()` now nulls out
+check_number/bank_name/check_image_path unless `paymentType === 'check'`
+specifically (previously: unless it was an adjustment).
+
+The Payment Type selector itself is now **always shown** (Cash/Check),
+not just for companies with an adjustable purchase bill — the
+Cash/Check split is useful record-keeping for every client, not a
+Simba-specific concept. Only the third option, Bill Adjustment, stays
+conditional on `$canAdjustAgainstPurchase`, unchanged from before.
+Payment History labels each row explicitly now: "Cash", "Check — ..."
+(or "no check details recorded"), or "Bill Adjustment — ...".
+
+Updated the one existing test that set check details without an
+explicit type (now sets `paymentType => 'check'` first) and added 2 new
+tests: a Cash payment discards check details even if some were typed in
+before switching type away from Check, and a Check payment with no
+check number/bank name still records fine. 304 tests passing (up from
+302).
+
+## Rename "Tiffin Purchases" → "Egg Purchase & Stock Management" (done, 2026-09-06)
+
+The page was always Egg-specific in practice (only Egg's cost fluctuates
+day to day; the item dropdown was already filtered to Egg only) — the
+"Tiffin Purchases" name was a holdover from before the Egg
+stock/sales/memo features were added on top of it. Client asked for the
+name to actually reflect what it is.
+
+Full rename, not just a label — route (`/tiffin-purchases` →
+`/egg-purchases`, name `tiffin-purchases.index` → `egg-purchases.index`),
+Livewire component folder (`resources/views/livewire/tiffin-purchases/`
+→ `egg-purchases/`, so `Volt::test('egg-purchases.purchase-manager')`
+now), view folder (`resources/views/tiffin-purchases/` →
+`egg-purchases/`), permission enum (`Permission::TiffinPurchasesView/
+Create/Modify` → `EggPurchasesView/Create/Modify`, values
+`tiffin_purchases.*` → `egg_purchases.*`, group "Tiffin Purchases" →
+"Egg Purchases"), `RolePermissionSeeder`'s Accountant defaults, the
+sidebar link ("Egg Purchases & Stock"), the in-page heading ("Egg
+Purchase & Stock Management"), internal modal keys
+(`tiffin-purchase-form` → `egg-purchase-form`, etc.), and the two "View
+Tiffin Purchases" links from `job-entry-form.blade.php`/
+`tiffin-batch-edit-form.blade.php` (now "View Egg Purchases"). Test file
+`TiffinPurchaseManagementTest.php` renamed to
+`EggPurchaseManagementTest.php`.
+
+Deliberately **not** renamed: the `TiffinItem`/`TiffinItemPurchase`
+models, the `tiffin_item_purchases` table, `tiffin_item_id` columns, and
+every place the text "Tiffin" refers to the actual Tiffin service
+category (e.g. "this is what Tiffin's cost rate is locked to") — those
+are real, unrelated business concepts, not the page identity being
+renamed. Grepped the whole codebase afterward to confirm zero remaining
+references to the old route/permission/component names outside this
+file's own changelog history.
+
+Reseeded (`migrate:fresh --seed --force`) since `RolePermissionSeeder`'s
+default grants changed to the new permission strings — old
+`tiffin_purchases.*` rows would otherwise sit inert in `role_permissions`
+forever, matching neither the new nor old enum. Same 304 tests still
+pass — this was a pure rename, no behavior changed.
+
+## Confirmed: new Tiffin entries already deduct from Egg stock (2026-09-06)
+
+Client asked to "make sure eggs are deducted only from stock" whenever a
+new Tiffin entry is added. Before writing anything, checked what "block
+the save if stock is insufficient" would actually cost: a grep of
+`JobEntryManagementTest.php` found over a dozen existing tests that
+create Tiffin/Egg batches with **no** purchase ever seeded — a hard
+block would fail all of them, since 0 purchased eggs means any
+consumption reads as insufficient stock. Flagged this tradeoff to the
+client via a question before touching code; they confirmed they want
+confirmation only, not an enforced block — staff can still record a
+Tiffin entry even if it pushes stock negative (same as today; a
+real-world signal to buy more eggs, not something the form should
+refuse).
+
+No code change needed — `eggInStock` (`egg-purchases/purchase-manager
+.blade.php`) already recomputes live from `TiffinItemPurchase` minus
+`JobEntry` (Tiffin, supply_type Egg) minus `EggSale` every time the page
+renders, so any new Tiffin/Egg entry is reflected the moment it's saved,
+with no separate step. Added one new test in `EggStockManagementTest.php`
+proving this end-to-end through the *real* save path (not a factory
+shortcut): seeds a 1,000-egg purchase, confirms stock reads 1,000,
+saves a brand-new Tiffin batch via `job-entries.job-entry-form`'s
+`saveTiffinItemBatch()` for 200 headcount (205 actual eggs including the
+buffer), then confirms stock reads exactly 795 afterward. 305 tests
+passing (up from 304).
+
+## Dashboard: daily Expenses chart (done, 2026-09-06)
+
+No JS charting library exists anywhere in this app — every dashboard
+chart (Billed vs Unbilled trend, By Company breakdown) is a pure
+CSS/Tailwind bar built from PHP-computed percentages, no dependency.
+Followed that exact same pattern rather than reaching for a library:
+added a `dailyExpenseTrend()` method to `dashboard.blade.php` (last 14
+days, grouped in PHP by a real Carbon property — the same "portable
+between MySQL and SQLite" convention `monthlyTrend()` already uses) and
+a matching bar-chart card, gated by `@can('expenses.view')` same as the
+Expenses sidebar link. 3 new tests in `DashboardTest.php`: the window
+total renders correctly across several days, an expense older than 14
+days is excluded, and a user without `expenses.view` never sees the
+chart at all. 308 tests passing (up from 305).
+
+## Service Summary: generalized from Tiffin-only to any category (done, 2026-09-06)
+
+Client wants the same Daily/Weekly/Monthly report "Tiffin Summary"
+already provided, but for *any* service category — pick a Company and a
+Category, see the same day-by-day breakdown.
+
+Renamed the whole feature — route (`/tiffin-summary` → `/service-summary`,
+name `tiffin-summary.index` → `service-summary.index`), Livewire
+component and view folders, sidebar link — same full-rename discipline
+as the Egg Purchases rename earlier this session (grepped afterward for
+zero stragglers). Permission stays `daily_summary.view`, unchanged — it
+was never Tiffin-specific.
+
+Added a required `categoryFilter` (`ServiceCategory::orderBy('sort_order')`)
+alongside the existing `companyFilter` — data only shows once *both* are
+selected. The per-day row-building logic branches on whether the
+selected category is literally named "Tiffin": if so, entries still
+collapse into one row per department per day (headcount, blended cost
+rate, the item list) exactly as before — Tiffin's batching rule didn't
+change, it just moved into a `tiffinRowsForDay()` helper. Every other
+category instead gets `plainRowsForDay()`: one row per job entry
+(supply_type + buyer/style/floor/challan_no shown alongside it), the
+same convention `daily-summary-detail.blade.php`'s own non-Tiffin branch
+already uses — no new display concept was invented, both categories
+funnel into the same generic `{label, detail, quantity, costRate,
+billRate, cost, bill, profit}` row shape so the Blade template renders
+either one identically.
+
+Test file renamed `TiffinSummaryTest.php` → `ServiceSummaryTest.php`;
+every existing Tiffin-specific test kept (now explicitly selecting the
+Tiffin category, since it's no longer implicit), plus new coverage: a
+non-Tiffin category shows one row per entry rather than grouping by
+department, a category's extra fields (buyer/style) render beside the
+item name, selecting one category excludes another category's entries
+for the same company/day, changing the category resets pagination same
+as changing company already did, and the report prompts for both
+filters rather than showing anything with only one set. Verified visually
+for both Tiffin (Swing/Wash Worker batching intact) and Daily Basic
+Labour (plain per-entry rows) against real dev data. 312 tests passing
+(up from 308).
