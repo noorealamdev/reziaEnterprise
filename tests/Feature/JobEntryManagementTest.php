@@ -265,6 +265,75 @@ test('challan number is not required for Diesel category', function () {
         ->assertHasNoErrors();
 });
 
+test('ETP Eid Holiday saves directly-entered cost and bill amounts without a quantity', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('ETP Eid Holiday');
+    $company->serviceCategories()->attach($category);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'ETP Tank Cleaning')
+        ->set('company_adv_payment', '50000')
+        ->set('cost_amount', '80000')
+        ->set('bill_amount', '100000')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'supply_type' => 'ETP Tank Cleaning',
+        'quantity' => null,
+        'cost_amount' => 80000,
+        'bill_amount' => 100000,
+        'company_adv_payment' => 50000,
+    ]);
+});
+
+test('switching to ETP Eid Holiday clears a quantity already typed for a different category', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+    $etpEid = makeServiceCategory('ETP Eid Holiday');
+    $company->serviceCategories()->attach([$labour->id, $etpEid->id]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $labour->id)
+        ->set('quantity', '10')
+        ->set('service_category_id', $etpEid->id)
+        ->assertSet('quantity', null);
+});
+
+test('ETP Eid Holiday cost and bill amounts are not overwritten by a quantity/rate calculation', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('ETP Eid Holiday');
+    $company->serviceCategories()->attach($category);
+
+    $this->actingAs($user);
+
+    // Cost/Bill Rate stay available as free-standing fields (per the
+    // client's choice), but must never drive Cost/Bill Amount here the
+    // way they do for every other category, since there's no quantity to
+    // multiply them by.
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('cost_amount', '80000')
+        ->set('bill_amount', '100000')
+        ->set('cost_rate', '5')
+        ->set('bill_rate', '7')
+        ->assertSet('cost_amount', '80000')
+        ->assertSet('bill_amount', '100000');
+});
+
 test('selecting Tiffin shows every department the company is assigned at once', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();

@@ -11,6 +11,8 @@ class InvoicePayment extends Model
         'invoice_id',
         'amount',
         'paid_on',
+        'type',
+        'company_purchase_id',
         'check_number',
         'bank_name',
         'check_image_path',
@@ -37,5 +39,10 @@ class InvoicePayment extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function companyPurchase(): BelongsTo
+    {
+        return $this->belongsTo(CompanyPurchase::class);
     }
 }

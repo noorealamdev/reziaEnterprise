@@ -15,9 +15,17 @@ enum Permission: string
     case JobEntriesCreate = 'job_entries.create';
     case JobEntriesModify = 'job_entries.modify';
 
-    case TiffinPurchasesView = 'tiffin_purchases.view';
-    case TiffinPurchasesCreate = 'tiffin_purchases.create';
-    case TiffinPurchasesModify = 'tiffin_purchases.modify';
+    case EggPurchasesView = 'egg_purchases.view';
+    case EggPurchasesCreate = 'egg_purchases.create';
+    case EggPurchasesModify = 'egg_purchases.modify';
+
+    case EggSalesView = 'egg_sales.view';
+    case EggSalesCreate = 'egg_sales.create';
+    case EggSalesModify = 'egg_sales.modify';
+
+    case CompanyPurchasesView = 'company_purchases.view';
+    case CompanyPurchasesCreate = 'company_purchases.create';
+    case CompanyPurchasesModify = 'company_purchases.modify';
 
     case DailySummaryView = 'daily_summary.view';
 
@@ -56,9 +64,15 @@ enum Permission: string
             self::JobEntriesView => 'View job entries',
             self::JobEntriesCreate => 'Add job entries',
             self::JobEntriesModify => 'Edit / delete job entries',
-            self::TiffinPurchasesView => 'View Tiffin purchases',
-            self::TiffinPurchasesCreate => 'Record Tiffin purchases',
-            self::TiffinPurchasesModify => 'Edit / delete Tiffin purchases',
+            self::EggPurchasesView => 'View Egg purchases & stock',
+            self::EggPurchasesCreate => 'Record Egg purchases',
+            self::EggPurchasesModify => 'Edit / delete Egg purchases',
+            self::EggSalesView => 'View Egg stock & sales to outside buyers',
+            self::EggSalesCreate => 'Record Egg sales to outside buyers',
+            self::EggSalesModify => 'Edit / delete Egg sales',
+            self::CompanyPurchasesView => 'View goods purchased from a company',
+            self::CompanyPurchasesCreate => 'Record goods purchased from a company',
+            self::CompanyPurchasesModify => 'Edit / delete company purchases',
             self::DailySummaryView => 'View Daily Summary',
             self::ServiceCategoriesManage => 'Manage service categories & Tiffin items',
             self::BillStatementView => 'View Bill Statement',
@@ -85,7 +99,9 @@ enum Permission: string
             self::DashboardView, self::DashboardViewProfit => 'Dashboard',
             self::CompaniesView, self::CompaniesCreate, self::CompaniesModify => 'Companies',
             self::JobEntriesView, self::JobEntriesCreate, self::JobEntriesModify => 'Job Entries',
-            self::TiffinPurchasesView, self::TiffinPurchasesCreate, self::TiffinPurchasesModify => 'Tiffin Purchases',
+            self::EggPurchasesView, self::EggPurchasesCreate, self::EggPurchasesModify => 'Egg Purchases',
+            self::EggSalesView, self::EggSalesCreate, self::EggSalesModify => 'Egg Sales',
+            self::CompanyPurchasesView, self::CompanyPurchasesCreate, self::CompanyPurchasesModify => 'Company Purchases',
             self::DailySummaryView => 'Daily Summary',
             self::ServiceCategoriesManage => 'Service Categories',
             self::BillStatementView => 'Bill Statement',

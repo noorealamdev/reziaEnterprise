@@ -9,10 +9,12 @@ use App\Models\TiffinItemPurchase;
 use App\Models\User;
 use App\Permission;
 use App\UserRole;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Volt\Volt;
 
 test('guests are redirected to login', function () {
-    $this->get('/tiffin-purchases')->assertRedirect('/login');
+    $this->get('/egg-purchases')->assertRedirect('/login');
 });
 
 test('year and month filters narrow the listed purchases', function () {
@@ -36,21 +38,21 @@ test('year and month filters narrow the listed purchases', function () {
 
     $this->actingAs($user);
 
-    $byYear = Volt::test('tiffin-purchases.purchase-manager')->set('yearFilter', '2025');
+    $byYear = Volt::test('egg-purchases.purchase-manager')->set('yearFilter', '2025');
     expect($byYear->viewData('purchases'))->toHaveCount(1);
 
-    $byMonth = Volt::test('tiffin-purchases.purchase-manager')
+    $byMonth = Volt::test('egg-purchases.purchase-manager')
         ->set('yearFilter', '2026')
         ->set('monthFilter', '3');
     expect($byMonth->viewData('purchases'))->toHaveCount(1);
 
-    $wrongMonth = Volt::test('tiffin-purchases.purchase-manager')
+    $wrongMonth = Volt::test('egg-purchases.purchase-manager')
         ->set('yearFilter', '2026')
         ->set('monthFilter', '4');
     expect($wrongMonth->viewData('purchases'))->toHaveCount(0);
 
     // Years offered always reflect every purchase, not just the current filter.
-    $component = Volt::test('tiffin-purchases.purchase-manager')->set('yearFilter', '2026');
+    $component = Volt::test('egg-purchases.purchase-manager')->set('yearFilter', '2026');
     expect($component->viewData('availableYears')->all())->toBe([2026, 2025]);
 });
 
@@ -59,7 +61,7 @@ test('changing the year clears an incompatible month selection', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->set('yearFilter', '2026')
         ->set('monthFilter', '3')
         ->set('yearFilter', '2025')
@@ -105,7 +107,7 @@ test('recording a purchase persists with a computed cost amount', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startCreate')
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
@@ -140,7 +142,7 @@ test('selecting an item and date that already has a purchase loads it instead of
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startCreate')
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
@@ -164,7 +166,7 @@ test('editing a purchase updates it', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startEdit', $purchase->id)
         ->set('quantity', '450')
         ->set('cost_rate', '11')
@@ -189,7 +191,7 @@ test('deleting a purchase removes it', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('confirmDelete', $purchase->id)
         ->call('delete');
 
@@ -204,7 +206,7 @@ test('only Egg can be selected for a purchase', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->assertSee('Egg')
         ->assertDontSee('Banana')
         ->assertDontSee('Bread');
@@ -216,7 +218,7 @@ test('starting a new purchase pre-selects Egg', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startCreate')
         ->assertSet('tiffin_item_id', $egg->id);
 });
@@ -227,7 +229,7 @@ test('quantity and cost rate are required', function () {
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startCreate')
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
@@ -240,7 +242,7 @@ test('supply by item defaults to purchases view with Banana pre-selected', funct
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->assertSet('activeView', 'purchases')
         ->assertSet('supplyItemFilter', 'Banana');
 });
@@ -293,7 +295,7 @@ test('supply by item totals quantity across every company for a day and a month'
 
     $this->actingAs($user);
 
-    $component = Volt::test('tiffin-purchases.purchase-manager')
+    $component = Volt::test('egg-purchases.purchase-manager')
         ->call('switchView', 'supply')
         ->set('supplyItemFilter', 'Banana')
         ->set('supplyYearFilter', '2026')
@@ -323,7 +325,7 @@ test('supply items list reflects every distinct item actually used, including ex
 
     $this->actingAs($user);
 
-    $component = Volt::test('tiffin-purchases.purchase-manager');
+    $component = Volt::test('egg-purchases.purchase-manager');
 
     expect($component->viewData('supplyItems')->all())->toContain('Biscuit');
 });
@@ -333,7 +335,7 @@ test('changing the supply year clears an incompatible month selection', function
 
     $this->actingAs($user);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->set('supplyYearFilter', '2026')
         ->set('supplyMonthFilter', '3')
         ->set('supplyYearFilter', '2025')
@@ -342,7 +344,7 @@ test('changing the supply year clears an incompatible month selection', function
 
 test('an accountant can record a purchase but gets a 403 trying to edit or delete one', function () {
     $accountant = User::factory()->accountant()->create();
-    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::TiffinPurchasesCreate->value]);
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggPurchasesCreate->value]);
     $egg = TiffinItem::create(['name' => 'Egg']);
     $purchase = TiffinItemPurchase::create([
         'tiffin_item_id' => $egg->id,
@@ -354,7 +356,7 @@ test('an accountant can record a purchase but gets a 403 trying to edit or delet
 
     $this->actingAs($accountant);
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startCreate')
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-05')
@@ -363,14 +365,169 @@ test('an accountant can record a purchase but gets a 403 trying to edit or delet
         ->call('save')
         ->assertHasNoErrors();
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('startEdit', $purchase->id)
         ->set('quantity', '999')
         ->call('save')
         ->assertForbidden();
 
-    Volt::test('tiffin-purchases.purchase-manager')
+    Volt::test('egg-purchases.purchase-manager')
         ->call('confirmDelete', $purchase->id)
         ->call('delete')
         ->assertForbidden();
+});
+
+test('uploading a purchase memo stores it against the purchase', function () {
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startCreate')
+        ->set('tiffin_item_id', $egg->id)
+        ->set('purchase_date', '2026-09-02')
+        ->set('quantity', '500')
+        ->set('cost_rate', '12.5')
+        ->set('memoFile', UploadedFile::fake()->image('memo.jpg'))
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $purchase = TiffinItemPurchase::where('tiffin_item_id', $egg->id)->firstOrFail();
+    expect($purchase->memo_path)->not->toBeNull();
+    Storage::disk('public')->assertExists($purchase->memo_path);
+});
+
+test('the purchase memo upload rejects a file that is not an image or pdf', function () {
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startCreate')
+        ->set('tiffin_item_id', $egg->id)
+        ->set('purchase_date', '2026-09-02')
+        ->set('quantity', '500')
+        ->set('cost_rate', '12.5')
+        ->set('memoFile', UploadedFile::fake()->create('memo.docx', 100))
+        ->call('save')
+        ->assertHasErrors(['memoFile']);
+
+    $this->assertDatabaseMissing('tiffin_item_purchases', ['tiffin_item_id' => $egg->id]);
+});
+
+test('editing a purchase without choosing a new file keeps the existing memo', function () {
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+    $purchase = TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-02',
+        'quantity' => 400,
+        'cost_rate' => 10,
+        'cost_amount' => 4000,
+        'memo_path' => 'purchase-memos/existing.jpg',
+    ]);
+    Storage::disk('public')->put('purchase-memos/existing.jpg', 'fake-image-content');
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startEdit', $purchase->id)
+        ->assertSet('existingMemoPath', 'purchase-memos/existing.jpg')
+        ->set('quantity', '450')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect($purchase->fresh()->memo_path)->toBe('purchase-memos/existing.jpg');
+    Storage::disk('public')->assertExists('purchase-memos/existing.jpg');
+});
+
+test('choosing a new memo file while editing replaces and deletes the old one', function () {
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+    $purchase = TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-02',
+        'quantity' => 400,
+        'cost_rate' => 10,
+        'cost_amount' => 4000,
+        'memo_path' => 'purchase-memos/old.jpg',
+    ]);
+    Storage::disk('public')->put('purchase-memos/old.jpg', 'fake-image-content');
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startEdit', $purchase->id)
+        ->set('memoFile', UploadedFile::fake()->image('new-memo.jpg'))
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $purchase->refresh();
+    expect($purchase->memo_path)->not->toBeNull();
+    expect($purchase->memo_path)->not->toBe('purchase-memos/old.jpg');
+    Storage::disk('public')->assertMissing('purchase-memos/old.jpg');
+    Storage::disk('public')->assertExists($purchase->memo_path);
+});
+
+test('removing a memo without uploading a replacement clears it and deletes the file', function () {
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+    $purchase = TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-02',
+        'quantity' => 400,
+        'cost_rate' => 10,
+        'cost_amount' => 4000,
+        'memo_path' => 'purchase-memos/existing.jpg',
+    ]);
+    Storage::disk('public')->put('purchase-memos/existing.jpg', 'fake-image-content');
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startEdit', $purchase->id)
+        ->call('clearMemo')
+        ->assertSet('existingMemoPath', null)
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect($purchase->fresh()->memo_path)->toBeNull();
+    Storage::disk('public')->assertMissing('purchase-memos/existing.jpg');
+});
+
+test('deleting a purchase also deletes its memo file from storage', function () {
+    Storage::fake('public');
+
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+    $purchase = TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-02',
+        'quantity' => 400,
+        'cost_rate' => 10,
+        'cost_amount' => 4000,
+        'memo_path' => 'purchase-memos/existing.jpg',
+    ]);
+    Storage::disk('public')->put('purchase-memos/existing.jpg', 'fake-image-content');
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('confirmDelete', $purchase->id)
+        ->call('delete');
+
+    $this->assertDatabaseMissing('tiffin_item_purchases', ['id' => $purchase->id]);
+    Storage::disk('public')->assertMissing('purchase-memos/existing.jpg');
 });

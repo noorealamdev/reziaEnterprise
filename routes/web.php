@@ -77,9 +77,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ]);
     })->where('date', '\d{4}-\d{2}-\d{2}')->middleware('can:job_entries.modify')->name('job-entries.batch-edit');
 
-    Route::get('tiffin-purchases', fn () => view('tiffin-purchases.index'))
-        ->middleware('can:tiffin_purchases.view')
-        ->name('tiffin-purchases.index');
+    Route::get('egg-purchases', fn () => view('egg-purchases.index'))
+        ->middleware('can:egg_purchases.view')
+        ->name('egg-purchases.index');
+
+    Route::get('company-purchases', fn () => view('company-purchases.index'))
+        ->middleware('can:company_purchases.view')
+        ->name('company-purchases.index');
 
     // Bill Statement replaced the standalone Invoices list — this name is
     // kept only so any old link/bookmark to /invoices still lands somewhere
@@ -106,6 +110,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
             'date' => $date,
         ]);
     })->where('date', '\d{4}-\d{2}-\d{2}')->middleware('can:daily_summary.view')->name('daily-summary.show');
+
+    Route::get('service-summary', fn () => view('service-summary.index'))
+        ->middleware('can:daily_summary.view')
+        ->name('service-summary.index');
 
     Route::get('bill-statement', fn () => view('bill-statement.index'))
         ->middleware('can:bill_statement.view')

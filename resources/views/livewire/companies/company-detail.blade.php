@@ -150,6 +150,11 @@ new class extends Component
         <x-secondary-button :href="route('bill-statement.index', ['company' => $company->id])" wire:navigate>
             Bill Statement
         </x-secondary-button>
+        @can('company_purchases.view')
+            <x-secondary-button :href="route('company-purchases.index', ['company' => $company->id])" wire:navigate>
+                Goods Purchased From Them
+            </x-secondary-button>
+        @endcan
     </div>
 
     <div>

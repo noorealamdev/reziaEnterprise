@@ -16,6 +16,8 @@ return new class extends Migration
             $table->foreignId('invoice_id')->constrained()->restrictOnDelete();
             $table->decimal('amount', 12, 2);
             $table->date('paid_on');
+            $table->string('type')->default('cash');
+            $table->foreignId('company_purchase_id')->nullable()->constrained()->restrictOnDelete();
             $table->string('check_number')->nullable();
             $table->string('bank_name')->nullable();
             $table->string('check_image_path')->nullable();

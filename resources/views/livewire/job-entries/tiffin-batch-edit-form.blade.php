@@ -263,7 +263,7 @@ new class extends Component
                         @if ($purchaseLocks[$itemName]->supplier_name)
                             from {{ $purchaseLocks[$itemName]->supplier_name }}
                         @endif
-                        — <a href="{{ route('tiffin-purchases.index') }}" wire:navigate class="font-medium underline">View Tiffin Purchases</a>
+                        — <a href="{{ route('egg-purchases.index') }}" wire:navigate class="font-medium underline">View Egg Purchases</a>
                     </p>
                 @endif
             </div>

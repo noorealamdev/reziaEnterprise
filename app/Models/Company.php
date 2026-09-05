@@ -50,4 +50,9 @@ class Company extends Model
     {
         return $this->belongsToMany(TiffinDepartment::class, 'company_tiffin_departments');
     }
+
+    public function companyPurchases(): HasMany
+    {
+        return $this->hasMany(CompanyPurchase::class);
+    }
 }

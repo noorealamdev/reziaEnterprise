@@ -134,9 +134,18 @@ new class extends Component
     public function updatedServiceCategoryId(): void
     {
         $tiffinId = $this->categoryIds['Tiffin'] ?? null;
+        $etpEidId = $this->categoryIds['ETP Eid Holiday'] ?? null;
 
         if ($this->service_category_id != $tiffinId) {
             $this->tiffin_department_id = null;
+        }
+
+        // ETP Eid Holiday is a one-off, advance-payment-based project, not a
+        // per-unit job — Quantity doesn't apply, so any leftover value from
+        // a previously-selected category is cleared rather than carried
+        // over silently.
+        if ($this->service_category_id == $etpEidId) {
+            $this->quantity = null;
         }
 
         $this->supply_type = '';
@@ -457,6 +466,13 @@ new class extends Component
 
         if ($validated['service_category_id'] != $etpEidId) {
             $validated['company_adv_payment'] = null;
+        }
+
+        // ETP Eid Holiday has no meaningful quantity (a one-off project,
+        // not a per-unit job) — Cost Amount/Bill Amount are typed directly
+        // for it rather than computed from Quantity × Rate.
+        if ($validated['service_category_id'] == $etpEidId) {
+            $validated['quantity'] = null;
         }
 
         $validated['supply_type'] = trim($validated['supply_type']);
@@ -901,7 +917,7 @@ new class extends Component
                                                 @if ($item->purchase->supplier_name)
                                                     from {{ $item->purchase->supplier_name }}
                                                 @endif
-                                                — <a href="{{ route('tiffin-purchases.index') }}" wire:navigate class="font-medium underline">View Tiffin Purchases</a>
+                                                — <a href="{{ route('egg-purchases.index') }}" wire:navigate class="font-medium underline">View Egg Purchases</a>
                                             </p>
                                         @endif
 
@@ -1016,7 +1032,11 @@ new class extends Component
 
         @unless ($tiffinBlockedNoDepartments)
         <div x-show="! $wire.multiItemMode" class="space-y-6">
-            <div>
+            {{-- ETP Eid Holiday is a one-off, advance-payment-based project —
+            there's no meaningful quantity to multiply a rate by, so this
+            field is hidden for it and Cost/Bill Amount below are typed in
+            directly instead of being auto-calculated. --}}
+            <div x-show="$wire.service_category_id != {{ $categoryIds['ETP Eid Holiday'] ?? 0 }}">
                 <x-input-label for="quantity" value="Quantity" />
                 <x-text-input wire:model.live.debounce.400ms="quantity" id="quantity" type="number" step="0.01" min="0" placeholder="e.g. 5" class="mt-1 block w-full" />
                 <x-input-error :messages="$errors->get('quantity')" class="mt-2" />
@@ -1036,13 +1056,21 @@ new class extends Component
 
             <div>
                 <x-input-label for="cost_amount" value="Cost Amount" />
-                <x-text-input wire:model="cost_amount" id="cost_amount" type="number" step="0.01" min="0" placeholder="Auto-filled from Quantity × Cost Rate" class="mt-1 block w-full" required />
+                <x-text-input
+                    wire:model="cost_amount" id="cost_amount" type="number" step="0.01" min="0"
+                    :placeholder="$service_category_id == ($categoryIds['ETP Eid Holiday'] ?? 0) ? 'e.g. 80000.00 (total cost)' : 'Auto-filled from Quantity × Cost Rate'"
+                    class="mt-1 block w-full" required
+                />
                 <x-input-error :messages="$errors->get('cost_amount')" class="mt-2" />
             </div>
 
             <div>
                 <x-input-label for="bill_amount" value="Bill Amount" />
-                <x-text-input wire:model="bill_amount" id="bill_amount" type="number" step="0.01" min="0" placeholder="Auto-filled from Quantity × Bill Rate" class="mt-1 block w-full" required />
+                <x-text-input
+                    wire:model="bill_amount" id="bill_amount" type="number" step="0.01" min="0"
+                    :placeholder="$service_category_id == ($categoryIds['ETP Eid Holiday'] ?? 0) ? 'e.g. 100000.00 (total bill)' : 'Auto-filled from Quantity × Bill Rate'"
+                    class="mt-1 block w-full" required
+                />
                 <x-input-error :messages="$errors->get('bill_amount')" class="mt-2" />
             </div>
         </div>

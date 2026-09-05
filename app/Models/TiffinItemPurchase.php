@@ -3,9 +3,11 @@
 namespace App\Models;
 
 use Database\Factories\TiffinItemPurchaseFactory;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Storage;
 
 class TiffinItemPurchase extends Model
 {
@@ -19,6 +21,7 @@ class TiffinItemPurchase extends Model
         'cost_rate',
         'cost_amount',
         'supplier_name',
+        'memo_path',
         'remarks',
         'created_by',
     ];
@@ -44,6 +47,20 @@ class TiffinItemPurchase extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    protected function memoUrl(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): ?string => $this->memo_path ? Storage::disk('public')->url($this->memo_path) : null,
+        );
+    }
+
+    protected function memoIsPdf(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): bool => str_ends_with((string) $this->memo_path, '.pdf'),
+        );
     }
 
     /**

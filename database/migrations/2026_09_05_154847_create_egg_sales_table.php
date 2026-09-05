@@ -11,20 +11,18 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('tiffin_item_purchases', function (Blueprint $table) {
+        Schema::create('egg_sales', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('tiffin_item_id')->constrained()->restrictOnDelete();
-            $table->date('purchase_date');
+            $table->date('sale_date');
             $table->decimal('quantity', 10, 2);
-            $table->decimal('cost_rate', 10, 2);
-            $table->decimal('cost_amount', 12, 2);
-            $table->string('supplier_name')->nullable();
-            $table->string('memo_path')->nullable();
+            $table->decimal('sale_rate', 10, 2);
+            $table->decimal('sale_amount', 12, 2);
+            $table->string('buyer_name')->nullable();
             $table->text('remarks')->nullable();
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();
 
-            $table->unique(['tiffin_item_id', 'purchase_date']);
+            $table->index('sale_date');
         });
     }
 
@@ -33,6 +31,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('tiffin_item_purchases');
+        Schema::dropIfExists('egg_sales');
     }
 };

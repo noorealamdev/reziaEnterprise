@@ -11,20 +11,21 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('tiffin_item_purchases', function (Blueprint $table) {
+        Schema::create('company_purchases', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('tiffin_item_id')->constrained()->restrictOnDelete();
+            $table->foreignId('company_id')->constrained()->cascadeOnDelete();
             $table->date('purchase_date');
-            $table->decimal('quantity', 10, 2);
-            $table->decimal('cost_rate', 10, 2);
-            $table->decimal('cost_amount', 12, 2);
-            $table->string('supplier_name')->nullable();
+            $table->string('description');
+            $table->string('bill_number')->nullable();
+            $table->decimal('quantity', 10, 2)->nullable();
+            $table->decimal('rate', 10, 2)->nullable();
+            $table->decimal('amount', 12, 2);
             $table->string('memo_path')->nullable();
             $table->text('remarks')->nullable();
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();
 
-            $table->unique(['tiffin_item_id', 'purchase_date']);
+            $table->index(['company_id', 'purchase_date']);
         });
     }
 
@@ -33,6 +34,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('tiffin_item_purchases');
+        Schema::dropIfExists('company_purchases');
     }
 };

@@ -1,10 +1,12 @@
 <?php
 
+use App\Models\CompanyPurchase;
 use App\Models\Invoice;
 use App\Support\NumberToWords;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Livewire\Volt\Component;
 use Livewire\WithFileUploads;
 use Livewire\WithPagination;
@@ -21,6 +23,10 @@ new class extends Component
     public string $paymentAmount = '';
 
     public string $paymentDate = '';
+
+    public string $paymentType = 'cash';
+
+    public ?int $companyPurchaseId = null;
 
     public string $checkNumber = '';
 
@@ -95,6 +101,8 @@ new class extends Component
 
         $this->paymentAmount = $remaining > 0 ? rtrim(rtrim(number_format($remaining, 2, '.', ''), '0'), '.') : '';
         $this->paymentDate = now()->toDateString();
+        $this->paymentType = 'cash';
+        $this->companyPurchaseId = null;
         $this->checkNumber = '';
         $this->bankName = '';
         $this->paymentDescription = '';
@@ -110,20 +118,42 @@ new class extends Component
         $validated = $this->validate([
             'paymentAmount' => ['required', 'numeric', 'min:0.01'],
             'paymentDate' => ['required', 'date'],
+            'paymentType' => ['required', Rule::in(['cash', 'check', 'adjustment'])],
+            'companyPurchaseId' => [
+                Rule::requiredIf($this->paymentType === 'adjustment'),
+                'nullable',
+                'integer',
+                Rule::exists('company_purchases', 'id')->where('company_id', $this->invoice->company_id),
+                function (string $attribute, $value, $fail): void {
+                    if ($this->paymentType !== 'adjustment' || ! $value) {
+                        return;
+                    }
+
+                    $purchase = CompanyPurchase::find($value);
+
+                    if ($purchase && $purchase->remainingBalance + 0.01 < (float) $this->paymentAmount) {
+                        $fail('This purchase bill only has '.number_format($purchase->remainingBalance, 2).' remaining to adjust against.');
+                    }
+                },
+            ],
             'checkNumber' => ['nullable', 'string', 'max:100'],
             'bankName' => ['nullable', 'string', 'max:255'],
             'paymentDescription' => ['nullable', 'string', 'max:2000'],
             'checkImage' => ['nullable', 'image', 'max:5120'],
         ]);
 
-        $imagePath = $this->checkImage ? $this->checkImage->store('check-screenshots', 'public') : null;
+        $isAdjustment = $validated['paymentType'] === 'adjustment';
+        $isCheck = $validated['paymentType'] === 'check';
+        $imagePath = ($isCheck && $this->checkImage) ? $this->checkImage->store('check-screenshots', 'public') : null;
 
-        DB::transaction(function () use ($validated, $imagePath) {
+        DB::transaction(function () use ($validated, $imagePath, $isAdjustment, $isCheck) {
             $this->invoice->payments()->create([
                 'amount' => (float) $validated['paymentAmount'],
                 'paid_on' => $validated['paymentDate'],
-                'check_number' => $validated['checkNumber'] ? trim($validated['checkNumber']) : null,
-                'bank_name' => $validated['bankName'] ? trim($validated['bankName']) : null,
+                'type' => $validated['paymentType'],
+                'company_purchase_id' => $isAdjustment ? $validated['companyPurchaseId'] : null,
+                'check_number' => ($isCheck && $validated['checkNumber']) ? trim($validated['checkNumber']) : null,
+                'bank_name' => ($isCheck && $validated['bankName']) ? trim($validated['bankName']) : null,
                 'check_image_path' => $imagePath,
                 'description' => $validated['paymentDescription'] ? trim($validated['paymentDescription']) : null,
                 'created_by' => auth()->id(),
@@ -303,6 +333,7 @@ new class extends Component
         $totalPaidViaPayments = (float) $this->invoice->payments()->sum('amount');
 
         $payments = $this->invoice->payments()
+            ->with('companyPurchase')
             ->orderByDesc('paid_on')
             ->orderByDesc('id')
             ->simplePaginate(10)
@@ -311,6 +342,10 @@ new class extends Component
                 'id' => $payment->id,
                 'amount' => (float) $payment->amount,
                 'paid_on' => $payment->paid_on,
+                'type' => $payment->type,
+                'companyPurchaseLabel' => $payment->companyPurchase
+                    ? ($payment->companyPurchase->bill_number ?: $payment->companyPurchase->description)
+                    : null,
                 'check_number' => $payment->check_number,
                 'bank_name' => $payment->bank_name,
                 'description' => $payment->description,
@@ -318,6 +353,16 @@ new class extends Component
             ]);
         $balanceDue = max(0, $owedBeforePayments - $totalPaidViaPayments);
         $finalAmount = $balanceDue;
+
+        // Bill Adjustment is only ever offered for a company that actually
+        // has a purchase bill with value left to draw down — naturally
+        // Simba-only today, without hardcoding a company name — and only
+        // to a user who can also see purchase-bill data.
+        $availableAdjustmentPurchases = CompanyPurchase::where('company_id', $this->invoice->company_id)
+            ->get()
+            ->filter(fn (CompanyPurchase $purchase) => $purchase->remainingBalance > 0)
+            ->values();
+        $canAdjustAgainstPurchase = Gate::allows('company_purchases.view') && $availableAdjustmentPurchases->isNotEmpty();
 
         return [
             'rows' => $rows,
@@ -342,6 +387,8 @@ new class extends Component
                 default => 'amber',
             },
             'statusLabel' => $this->invoice->status === 'partial' ? 'Partially Paid' : ucfirst($this->invoice->status),
+            'availableAdjustmentPurchases' => $availableAdjustmentPurchases,
+            'canAdjustAgainstPurchase' => $canAdjustAgainstPurchase,
         ];
     }
 }; ?>
@@ -410,10 +457,17 @@ new class extends Component
                                 <span class="font-normal text-slate-400 dark:text-slate-500">— {{ $payment->paid_on->format('d M Y') }}</span>
                             </p>
                             <p class="text-xs text-slate-500 dark:text-slate-400">
-                                @if ($payment->check_number || $payment->bank_name)
-                                    {{ collect([$payment->check_number ? "Check {$payment->check_number}" : null, $payment->bank_name])->filter()->implode(' · ') }}
+                                @if ($payment->type === 'adjustment')
+                                    <span class="font-medium text-brand-600 dark:text-brand-400">Bill Adjustment</span> — {{ $payment->companyPurchaseLabel }}
+                                @elseif ($payment->type === 'check')
+                                    <span class="font-medium text-slate-600 dark:text-slate-300">Check</span>
+                                    @if ($payment->check_number || $payment->bank_name)
+                                        — {{ collect([$payment->check_number ? "Check {$payment->check_number}" : null, $payment->bank_name])->filter()->implode(' · ') }}
+                                    @else
+                                        — no check details recorded
+                                    @endif
                                 @else
-                                    No check details recorded
+                                    Cash
                                 @endif
                             </p>
                             @if ($payment->description)
@@ -627,7 +681,13 @@ new class extends Component
         <div class="p-6">
             <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Record Payment</h2>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                If this was paid by check, record the details below. Check details are optional.
+                @if ($paymentType === 'adjustment')
+                    Settle this invoice against a purchase bill instead of collecting cash.
+                @elseif ($paymentType === 'check')
+                    Record the check details below — they're optional.
+                @else
+                    A plain cash payment, no check details.
+                @endif
             </p>
 
             <div class="mt-4 space-y-4">
@@ -644,26 +704,54 @@ new class extends Component
                 </div>
 
                 <div>
-                    <x-input-label for="checkNumber" value="Check Number" />
-                    <x-text-input wire:model="checkNumber" id="checkNumber" placeholder="e.g. 0451236" class="mt-1 block w-full" />
-                    <x-input-error :messages="$errors->get('checkNumber')" class="mt-2" />
+                    <x-input-label for="paymentType" value="Payment Type" />
+                    <x-select-input wire:model.live="paymentType" id="paymentType" class="mt-1 block w-full">
+                        <option value="cash">Cash</option>
+                        <option value="check">Check</option>
+                        @if ($canAdjustAgainstPurchase)
+                            <option value="adjustment">Bill Adjustment</option>
+                        @endif
+                    </x-select-input>
+                    <x-input-error :messages="$errors->get('paymentType')" class="mt-2" />
                 </div>
 
-                <div>
-                    <x-input-label for="bankName" value="Bank Name" />
-                    <x-text-input wire:model="bankName" id="bankName" placeholder="e.g. Dutch-Bangla Bank" class="mt-1 block w-full" />
-                    <x-input-error :messages="$errors->get('bankName')" class="mt-2" />
-                </div>
+                @if ($paymentType === 'adjustment')
+                    <div>
+                        <x-input-label for="companyPurchaseId" value="Purchase Bill" />
+                        <x-select-input wire:model="companyPurchaseId" id="companyPurchaseId" class="mt-1 block w-full" required>
+                            <option value="">Select a purchase bill…</option>
+                            @foreach ($availableAdjustmentPurchases as $purchase)
+                                <option value="{{ $purchase->id }}">
+                                    {{ $purchase->bill_number ?: $purchase->description }} — remaining {{ number_format($purchase->remainingBalance, 2) }}
+                                </option>
+                            @endforeach
+                        </x-select-input>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The amount above is applied against this purchase bill instead of being collected as cash.</p>
+                        <x-input-error :messages="$errors->get('companyPurchaseId')" class="mt-2" />
+                    </div>
+                @elseif ($paymentType === 'check')
+                    <div>
+                        <x-input-label for="checkNumber" value="Check Number" />
+                        <x-text-input wire:model="checkNumber" id="checkNumber" placeholder="e.g. 0451236" class="mt-1 block w-full" />
+                        <x-input-error :messages="$errors->get('checkNumber')" class="mt-2" />
+                    </div>
 
-                <div>
-                    <x-input-label for="checkImage" value="Check Screenshot" />
-                    <input type="file" wire:model="checkImage" id="checkImage" accept="image/*" class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-400 dark:file:bg-slate-700 dark:file:text-slate-200">
-                    <div wire:loading wire:target="checkImage" class="mt-1 text-xs text-slate-400 dark:text-slate-500">Uploading…</div>
-                    @if ($checkImage && $checkImage->isPreviewable())
-                        <img src="{{ $checkImage->temporaryUrl() }}" alt="Check screenshot preview" class="mt-2 max-h-32 rounded-lg border border-slate-200 dark:border-slate-700">
-                    @endif
-                    <x-input-error :messages="$errors->get('checkImage')" class="mt-2" />
-                </div>
+                    <div>
+                        <x-input-label for="bankName" value="Bank Name" />
+                        <x-text-input wire:model="bankName" id="bankName" placeholder="e.g. Dutch-Bangla Bank" class="mt-1 block w-full" />
+                        <x-input-error :messages="$errors->get('bankName')" class="mt-2" />
+                    </div>
+
+                    <div>
+                        <x-input-label for="checkImage" value="Check Screenshot" />
+                        <input type="file" wire:model="checkImage" id="checkImage" accept="image/*" class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-400 dark:file:bg-slate-700 dark:file:text-slate-200">
+                        <div wire:loading wire:target="checkImage" class="mt-1 text-xs text-slate-400 dark:text-slate-500">Uploading…</div>
+                        @if ($checkImage && $checkImage->isPreviewable())
+                            <img src="{{ $checkImage->temporaryUrl() }}" alt="Check screenshot preview" class="mt-2 max-h-32 rounded-lg border border-slate-200 dark:border-slate-700">
+                        @endif
+                        <x-input-error :messages="$errors->get('checkImage')" class="mt-2" />
+                    </div>
+                @endif
 
                 <div>
                     <x-input-label for="paymentDescription" value="Description" />

@@ -564,6 +564,7 @@ test('recording a payment that covers the full amount marks the invoice paid', f
     Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
         ->call('startRecordPayment')
         ->assertSet('paymentAmount', '1000')
+        ->set('paymentType', 'check')
         ->set('checkNumber', '0451236')
         ->set('bankName', 'Dutch-Bangla Bank')
         ->set('paymentDescription', 'Handed over by the factory accountant')
@@ -578,11 +579,70 @@ test('recording a payment that covers the full amount marks the invoice paid', f
 
     $payment = $invoice->payments->first();
     expect((float) $payment->amount)->toBe(1000.0);
+    expect($payment->type)->toBe('check');
     expect($payment->check_number)->toBe('0451236');
     expect($payment->bank_name)->toBe('Dutch-Bangla Bank');
     expect($payment->description)->toBe('Handed over by the factory accountant');
     expect($payment->check_image_path)->not->toBeNull();
     Storage::disk('public')->assertExists($payment->check_image_path);
+});
+
+test('a plain cash payment stores no check details even if some were typed in before switching type', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'TEST-CASH-1',
+        'period_start' => '2026-08-01',
+        'period_end' => '2026-08-31',
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create(['service_category_id' => $category->id, 'invoice_id' => $invoice->id, 'bill_amount' => 500]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->call('startRecordPayment')
+        ->assertSet('paymentType', 'cash')
+        ->set('checkNumber', '9999')
+        ->set('bankName', 'Some Bank')
+        ->call('recordPayment')
+        ->assertHasNoErrors();
+
+    $payment = $invoice->fresh()->payments->first();
+    expect($payment->type)->toBe('cash');
+    expect($payment->check_number)->toBeNull();
+    expect($payment->bank_name)->toBeNull();
+});
+
+test('a check payment without any check number or bank name still records fine', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'TEST-CHECK-1',
+        'period_start' => '2026-08-01',
+        'period_end' => '2026-08-31',
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create(['service_category_id' => $category->id, 'invoice_id' => $invoice->id, 'bill_amount' => 500]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->call('startRecordPayment')
+        ->set('paymentType', 'check')
+        ->call('recordPayment')
+        ->assertHasNoErrors();
+
+    $payment = $invoice->fresh()->payments->first();
+    expect($payment->type)->toBe('check');
+    expect($payment->check_number)->toBeNull();
+    expect($payment->bank_name)->toBeNull();
 });
 
 test('recording a partial payment marks the invoice partially paid and leaves a balance', function () {
