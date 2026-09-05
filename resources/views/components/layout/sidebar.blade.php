@@ -53,15 +53,28 @@
             </x-layout.sidebar-link>
         @endcan
 
-        @can('tiffin_purchases.view')
-            <x-layout.sidebar-link :href="route('tiffin-purchases.index')" :active="request()->routeIs('tiffin-purchases.*')">
+        @can('egg_purchases.view')
+            <x-layout.sidebar-link :href="route('egg-purchases.index')" :active="request()->routeIs('egg-purchases.*')">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M5 9h14l-1.5 10.5a2 2 0 0 1-2 1.5H8.5a2 2 0 0 1-2-1.5L5 9z" />
                         <path d="M9 9V6a3 3 0 0 1 6 0v3" />
                     </svg>
                 </x-slot:icon>
-                Tiffin Purchases
+                Egg Purchases & Stock
+            </x-layout.sidebar-link>
+        @endcan
+
+        @can('company_purchases.view')
+            <x-layout.sidebar-link :href="route('company-purchases.index')" :active="request()->routeIs('company-purchases.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3.5" y="7" width="17" height="13" rx="1.5" />
+                        <path d="M8 7V5.5A2.5 2.5 0 0 1 10.5 3h3A2.5 2.5 0 0 1 16 5.5V7" />
+                        <path d="M3.5 12h17" />
+                    </svg>
+                </x-slot:icon>
+                Company Purchases
             </x-layout.sidebar-link>
         @endcan
 
@@ -75,6 +88,19 @@
                     </svg>
                 </x-slot:icon>
                 Daily Summary
+            </x-layout.sidebar-link>
+        @endcan
+
+        @can('daily_summary.view')
+            <x-layout.sidebar-link :href="route('service-summary.index')" :active="request()->routeIs('service-summary.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 9h14l-1.5 10.5a2 2 0 0 1-2 1.5H8.5a2 2 0 0 1-2-1.5L5 9z" />
+                        <path d="M9 9V6a3 3 0 0 1 6 0v3" />
+                        <path d="M9 13h6M9 16h6" />
+                    </svg>
+                </x-slot:icon>
+                Service Summary
             </x-layout.sidebar-link>
         @endcan
 
