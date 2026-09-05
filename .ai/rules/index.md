@@ -6,4 +6,5 @@ Before planning or editing, find the row whose globs match the file's path and r
 | --- | --- |
 | app/**/*.php | .ai/rules/app.md |
 | config/*.php | .ai/rules/config.md |
+| resources/views/livewire/job-entries/** | .ai/rules/job-entries.md |
 | database/migrations/** | .ai/rules/migrations.md |
