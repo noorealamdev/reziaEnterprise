@@ -27,5 +27,22 @@ class CompanySeeder extends Seeder
         // original spreadsheet analysis, across both tiffin departments.
         $company->serviceCategories()->sync(ServiceCategory::pluck('id'));
         $company->tiffinDepartments()->sync(TiffinDepartment::pluck('id'));
+
+        // Simba Fashion is a client like any other (receives Tiffin and
+        // other services, gets invoiced the normal way) but also sells
+        // Rezia goods on the side — tracked separately via Company
+        // Purchases, deliberately not netted against what Simba owes on
+        // its invoices (client confirmed 2026-09-05: keep the two ledgers
+        // independent).
+        $simba = Company::query()->updateOrCreate(
+            ['code' => 'SIMBA'],
+            [
+                'name' => 'Simba Fashion',
+                'is_active' => true,
+            ]
+        );
+
+        $simba->serviceCategories()->sync(ServiceCategory::pluck('id'));
+        $simba->tiffinDepartments()->sync(TiffinDepartment::pluck('id'));
     }
 }

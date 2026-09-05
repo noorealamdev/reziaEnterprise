@@ -34,42 +34,44 @@ class JobEntrySeeder extends Seeder
         $today = now();
 
         // Only Egg bills (a fixed rate per person, matching the company's
-        // tiffin_bill_rate) — Banana/Bread are cost-tracking only.
-        if ($swing && $categories->has('Tiffin')) {
-            $this->tiffinDay($company, $categories['Tiffin'], $swing, $today->copy(), [
-                'Banana' => [40, 5, 0],
-                'Egg' => [40, 11.5, 30],
-                'Bread' => [40, 7.8, 0],
-            ]);
+        // tiffin_bill_rate) — Banana/Bread are cost-tracking only. Seeded
+        // for the trailing 30 days (today and the 29 days before it) so
+        // the Tiffin Summary report's Weekly/Monthly views have a full
+        // month of days to actually aggregate. Headcounts cycle through a
+        // small fixed pattern per department rather than repeating one
+        // flat number every day.
+        if ($categories->has('Tiffin')) {
+            $swingHeadcounts = [40, 38, 42, 39, 41];
+            $washHeadcounts = [25, 22, 27, 24];
 
-            $this->tiffinDay($company, $categories['Tiffin'], $swing, $today->copy()->subDay(), [
-                'Banana' => [38, 5, 0],
-                'Egg' => [38, 11.5, 30],
-                'Bread' => [38, 7.8, 0],
-            ]);
+            $date = $today->copy()->subDays(29);
+            $dayIndex = 0;
 
-            $this->tiffinDay($company, $categories['Tiffin'], $swing, $today->copy()->subDays(2), [
-                'Banana' => [42, 5, 0],
-                'Egg' => [42, 11.5, 30],
-                'Bread' => [42, 7.8, 0],
-            ]);
-        }
+            while ($date->lte($today)) {
+                if ($swing) {
+                    $headcount = $swingHeadcounts[$dayIndex % count($swingHeadcounts)];
+                    $this->tiffinDay($company, $categories['Tiffin'], $swing, $date->copy(), [
+                        'Banana' => [$headcount, 5, 0],
+                        'Egg' => [$headcount, 11.5, 30],
+                        'Bread' => [$headcount, 7.8, 0],
+                    ]);
+                }
 
-        if ($washWorker && $categories->has('Tiffin')) {
-            // Swing already seeded these two days above — the egg buffer
-            // goes there (alphabetically first), so Wash Worker's own Egg
-            // row carries none.
-            $this->tiffinDay($company, $categories['Tiffin'], $washWorker, $today->copy(), [
-                'Banana' => [25, 5, 0],
-                'Egg' => [25, 11.5, 30],
-                'Bread' => [25, 7.8, 0],
-            ], includeEggBuffer: false);
+                if ($washWorker) {
+                    // Swing already carries the day's egg buffer above (it's
+                    // sent once per company per day) — Wash Worker's own Egg
+                    // row carries none.
+                    $headcount = $washHeadcounts[$dayIndex % count($washHeadcounts)];
+                    $this->tiffinDay($company, $categories['Tiffin'], $washWorker, $date->copy(), [
+                        'Banana' => [$headcount, 5, 0],
+                        'Egg' => [$headcount, 11.5, 30],
+                        'Bread' => [$headcount, 7.8, 0],
+                    ], includeEggBuffer: false);
+                }
 
-            $this->tiffinDay($company, $categories['Tiffin'], $washWorker, $today->copy()->subDay(), [
-                'Banana' => [22, 5, 0],
-                'Egg' => [22, 11.5, 30],
-                'Bread' => [22, 7.8, 0],
-            ], includeEggBuffer: false);
+                $date->addDay();
+                $dayIndex++;
+            }
         }
 
         if ($categories->has('Daily Basic Labour')) {
@@ -180,13 +182,29 @@ class JobEntrySeeder extends Seeder
         }
 
         if ($categories->has('ETP Eid Holiday')) {
-            $this->entry($company, $categories['ETP Eid Holiday'], $today->copy()->subDays(30), [
-                'supply_type' => 'ETP Tank Cleaning',
-                'quantity' => 1,
-                'cost_rate' => 80000,
-                'bill_rate' => 100000,
-                'company_adv_payment' => 50000,
-            ]);
+            // A one-off, advance-payment-based project — no meaningful
+            // quantity, so cost/bill amounts are set directly here rather
+            // than through the shared entry() helper's quantity × rate
+            // calculation, matching how the Job Entry form now handles
+            // this category.
+            JobEntry::query()->updateOrCreate(
+                [
+                    'company_id' => $company->id,
+                    'service_category_id' => $categories['ETP Eid Holiday'],
+                    'tiffin_department_id' => null,
+                    'supply_type' => 'ETP Tank Cleaning',
+                    'buyer' => null,
+                    'entry_date' => $today->copy()->subDays(30)->toDateString(),
+                ],
+                [
+                    'quantity' => null,
+                    'cost_amount' => 80000,
+                    'bill_amount' => 100000,
+                    'profit_amount' => 20000,
+                    'company_adv_payment' => 50000,
+                    'is_off_day' => false,
+                ]
+            );
         }
     }
 

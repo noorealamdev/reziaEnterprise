@@ -29,5 +29,7 @@ class DatabaseSeeder extends Seeder
         $this->call(TiffinItemSeeder::class);
         $this->call(CompanySeeder::class);
         $this->call(JobEntrySeeder::class);
+        $this->call(EggStockSeeder::class);
+        $this->call(SimbaFashionSeeder::class);
     }
 }
