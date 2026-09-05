@@ -90,7 +90,7 @@ test('removing a logo deletes it from storage and reverts to the default mark', 
     Storage::disk('public')->assertMissing($path);
 
     // Falls back to the default inline SVG mark, not a broken image.
-    $this->get('/dashboard')->assertOk()->assertSee('fill="#4F46E5"', false);
+    $this->get('/dashboard')->assertOk()->assertSee('fill="#303960"', false);
 });
 
 test('a super admin can create a user and assign a role', function () {
