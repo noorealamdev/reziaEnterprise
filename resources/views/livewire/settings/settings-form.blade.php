@@ -74,6 +74,7 @@ new class extends Component
 
         $canManageSettings = $user->hasPermission(\App\Permission::SettingsManage) || Gate::allows('users.manage');
         $canManageUsers = Gate::allows('users.manage');
+        $canManagePersonalLedger = Gate::allows('personal-ledger.manage');
 
         // Land on a tab this user can actually see — a non-Super-Admin
         // hitting the Users/Roles tab via a stale URL falls back to Logo
@@ -84,11 +85,15 @@ new class extends Component
         if (in_array($this->activeTab, ['users', 'roles'], true) && ! $canManageUsers) {
             $this->activeTab = 'logo';
         }
+        if ($this->activeTab === 'personal-ledger' && ! $canManagePersonalLedger) {
+            $this->activeTab = 'logo';
+        }
 
         return [
             'logoUrl' => $setting->logo_path ? Storage::disk('public')->url($setting->logo_path) : null,
             'canManageSettings' => $canManageSettings,
             'canManageUsers' => $canManageUsers,
+            'canManagePersonalLedger' => $canManagePersonalLedger,
         ];
     }
 }; ?>
@@ -118,6 +123,15 @@ new class extends Component
                 class="border-b-2 px-1 pb-2 text-sm font-medium {{ $activeTab === 'roles' ? 'border-brand-600 text-brand-600 dark:border-brand-400 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
             >
                 Roles &amp; Permissions
+            </button>
+        @endif
+        @if ($canManagePersonalLedger)
+            <button
+                type="button"
+                wire:click="switchTab('personal-ledger')"
+                class="border-b-2 px-1 pb-2 text-sm font-medium {{ $activeTab === 'personal-ledger' ? 'border-brand-600 text-brand-600 dark:border-brand-400 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+            >
+                Personal Ledger
             </button>
         @endif
     </div>
@@ -186,5 +200,7 @@ new class extends Component
         <livewire:settings.user-manager />
     @elseif ($activeTab === 'roles' && $canManageUsers)
         <livewire:settings.role-permissions-manager />
+    @elseif ($activeTab === 'personal-ledger' && $canManagePersonalLedger)
+        <livewire:settings.personal-ledger-manager />
     @endif
 </div>

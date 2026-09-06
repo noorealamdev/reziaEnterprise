@@ -27,9 +27,12 @@ class DatabaseSeeder extends Seeder
         $this->call(ServiceCategorySeeder::class);
         $this->call(TiffinDepartmentSeeder::class);
         $this->call(TiffinItemSeeder::class);
+        $this->call(LoadingUnloadingItemSeeder::class);
         $this->call(CompanySeeder::class);
         $this->call(JobEntrySeeder::class);
         $this->call(EggStockSeeder::class);
         $this->call(SimbaFashionSeeder::class);
+        $this->call(CompanyAgreementSeeder::class);
+        $this->call(PersonalLedgerSeeder::class);
     }
 }

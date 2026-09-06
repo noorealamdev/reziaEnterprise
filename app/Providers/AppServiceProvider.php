@@ -31,5 +31,12 @@ class AppServiceProvider extends ServiceProvider
         // Super Admin check, so no misconfigured grant can ever let someone
         // promote themselves or another user to Super Admin.
         Gate::define('users.manage', fn (User $user) => $user->role === UserRole::SuperAdmin);
+
+        // The Personal Ledger is the client's own private side-business
+        // tracker (cash sales to personal contacts, separate from Rezia
+        // Enterprise's own books) — same hard, non-grantable Super Admin
+        // check as users.manage, deliberately never added to the Permission
+        // enum so no Super Admin can ever delegate it to Staff/Accountant.
+        Gate::define('personal-ledger.manage', fn (User $user) => $user->role === UserRole::SuperAdmin);
     }
 }
