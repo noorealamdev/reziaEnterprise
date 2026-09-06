@@ -36,6 +36,10 @@ new class extends Component
     #[Url(as: 'supply_month', history: true)]
     public string $supplyMonthFilter = '';
 
+    /** Quick range: '' (use Year/Month), '7' (last 7 days) or '15' (last 15 days). */
+    #[Url(as: 'supply_range', history: true)]
+    public string $supplyRangeFilter = '';
+
     #[Url(as: 'item', history: true)]
     public string $itemFilter = '';
 
@@ -45,11 +49,19 @@ new class extends Component
     #[Url(as: 'month', history: true)]
     public string $monthFilter = '';
 
+    /** Quick range: '' (use Year/Month), '7' (last 7 days) or '15' (last 15 days). */
+    #[Url(as: 'range', history: true)]
+    public string $rangeFilter = '';
+
     #[Url(as: 'sale_year', history: true)]
     public string $saleYearFilter = '';
 
     #[Url(as: 'sale_month', history: true)]
     public string $saleMonthFilter = '';
+
+    /** Quick range: '' (use Year/Month), '7' (last 7 days) or '15' (last 15 days). */
+    #[Url(as: 'sale_range', history: true)]
+    public string $saleRangeFilter = '';
 
     public ?int $editingId = null;
 
@@ -113,13 +125,22 @@ new class extends Component
     public function updatingYearFilter(): void
     {
         // A month only makes sense within a chosen year — clear it if the
-        // year changes so the two never disagree.
+        // year changes so the two never disagree. The quick range filter is
+        // a separate, mutually exclusive way to scope the same list.
         $this->monthFilter = '';
+        $this->rangeFilter = '';
         $this->resetPage();
     }
 
     public function updatingMonthFilter(): void
     {
+        $this->resetPage();
+    }
+
+    public function updatingRangeFilter(): void
+    {
+        $this->yearFilter = '';
+        $this->monthFilter = '';
         $this->resetPage();
     }
 
@@ -136,8 +157,10 @@ new class extends Component
     public function updatingSupplyYearFilter(): void
     {
         // A month only makes sense within a chosen year — clear it if the
-        // year changes so the two never disagree.
+        // year changes so the two never disagree. The quick range filter is
+        // a separate, mutually exclusive way to scope the same report.
         $this->supplyMonthFilter = '';
+        $this->supplyRangeFilter = '';
         $this->resetPage('supplyPage');
     }
 
@@ -146,16 +169,32 @@ new class extends Component
         $this->resetPage('supplyPage');
     }
 
+    public function updatingSupplyRangeFilter(): void
+    {
+        $this->supplyYearFilter = '';
+        $this->supplyMonthFilter = '';
+        $this->resetPage('supplyPage');
+    }
+
     public function updatingSaleYearFilter(): void
     {
         // A month only makes sense within a chosen year — clear it if the
-        // year changes so the two never disagree.
+        // year changes so the two never disagree. The quick range filter is
+        // a separate, mutually exclusive way to scope the same report.
         $this->saleMonthFilter = '';
+        $this->saleRangeFilter = '';
         $this->resetPage('salesPage');
     }
 
     public function updatingSaleMonthFilter(): void
     {
+        $this->resetPage('salesPage');
+    }
+
+    public function updatingSaleRangeFilter(): void
+    {
+        $this->saleYearFilter = '';
+        $this->saleMonthFilter = '';
         $this->resetPage('salesPage');
     }
 
@@ -175,11 +214,14 @@ new class extends Component
             'supply_item' => $this->supplyItemFilter,
             'supply_year' => $this->supplyYearFilter,
             'supply_month' => $this->supplyMonthFilter,
+            'supply_range' => $this->supplyRangeFilter,
             'item' => $this->itemFilter,
             'year' => $this->yearFilter,
             'month' => $this->monthFilter,
+            'range' => $this->rangeFilter,
             'sale_year' => $this->saleYearFilter,
             'sale_month' => $this->saleMonthFilter,
+            'sale_range' => $this->saleRangeFilter,
         ], fn ($value) => $value !== '');
     }
 
@@ -448,6 +490,7 @@ new class extends Component
             'items' => TiffinItem::where('is_active', true)->where('name', 'Egg')->orderBy('name')->get(),
             'purchases' => TiffinItemPurchase::with('tiffinItem')
                 ->when($this->itemFilter, fn ($query) => $query->where('tiffin_item_id', $this->itemFilter))
+                ->when($this->rangeFilter, fn ($query) => $query->whereDate('purchase_date', '>=', now()->subDays((int) $this->rangeFilter - 1)->startOfDay()->toDateString()))
                 ->when($this->yearFilter, fn ($query) => $query->whereYear('purchase_date', $this->yearFilter))
                 ->when($this->monthFilter, fn ($query) => $query->whereMonth('purchase_date', $this->monthFilter))
                 ->orderByDesc('purchase_date')
@@ -512,7 +555,8 @@ new class extends Component
             ->sortDesc()
             ->values();
 
-        $sales = EggSale::when($this->saleYearFilter, fn ($query) => $query->whereYear('sale_date', $this->saleYearFilter))
+        $sales = EggSale::when($this->saleRangeFilter, fn ($query) => $query->whereDate('sale_date', '>=', now()->subDays((int) $this->saleRangeFilter - 1)->startOfDay()->toDateString()))
+            ->when($this->saleYearFilter, fn ($query) => $query->whereYear('sale_date', $this->saleYearFilter))
             ->when($this->saleMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->saleMonthFilter))
             ->orderByDesc('sale_date')
             ->orderByDesc('id')
@@ -557,6 +601,7 @@ new class extends Component
         $supplyAvailableYears = $itemEntries->map(fn (JobEntry $entry) => $entry->entry_date->year)->unique()->sortDesc()->values();
 
         $filteredEntries = $itemEntries
+            ->when($this->supplyRangeFilter, fn ($rows) => $rows->filter(fn (JobEntry $entry) => $entry->entry_date->greaterThanOrEqualTo(now()->subDays((int) $this->supplyRangeFilter - 1)->startOfDay())))
             ->when($this->supplyYearFilter, fn ($rows) => $rows->filter(fn (JobEntry $entry) => $entry->entry_date->year == $this->supplyYearFilter))
             ->when($this->supplyMonthFilter, fn ($rows) => $rows->filter(fn (JobEntry $entry) => $entry->entry_date->month == $this->supplyMonthFilter));
 
@@ -578,6 +623,8 @@ new class extends Component
         ))->appends($this->urlQueryState());
 
         $scopeLabel = match (true) {
+            $this->supplyRangeFilter === '7' => 'Last 7 Days',
+            $this->supplyRangeFilter === '15' => 'Last 15 Days',
             (bool) $this->supplyYearFilter && (bool) $this->supplyMonthFilter => Carbon::create((int) $this->supplyYearFilter, (int) $this->supplyMonthFilter, 1)->format('F Y'),
             (bool) $this->supplyYearFilter => (string) $this->supplyYearFilter,
             default => 'all-time',
@@ -634,27 +681,30 @@ new class extends Component
         </div>
     @endcan
 
-    <div class="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-700">
+    <div class="inline-flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800/60">
         <button
             type="button"
             wire:click="switchView('purchases')"
-            class="border-b-2 px-1 pb-2 text-sm font-medium {{ $activeView === 'purchases' ? 'border-brand-600 text-brand-600 dark:border-brand-400 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'purchases' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
         >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M5 9h14l-1.5 10.5a2 2 0 0 1-2 1.5H8.5a2 2 0 0 1-2-1.5L5 9z" /><path stroke-linecap="round" stroke-linejoin="round" d="M9 9V6a3 3 0 0 1 6 0v3" /></svg>
             Purchases
         </button>
         <button
             type="button"
             wire:click="switchView('supply')"
-            class="border-b-2 px-1 pb-2 text-sm font-medium {{ $activeView === 'supply' ? 'border-brand-600 text-brand-600 dark:border-brand-400 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'supply' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
         >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M3.5 12h17M3.5 12l4-4M3.5 12l4 4M20.5 12l-4-4M20.5 12l-4 4" /></svg>
             Supply by Item
         </button>
         @can('egg_sales.view')
             <button
                 type="button"
                 wire:click="switchView('sales')"
-                class="border-b-2 px-1 pb-2 text-sm font-medium {{ $activeView === 'sales' ? 'border-brand-600 text-brand-600 dark:border-brand-400 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'sales' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
             >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19V5m5 14V9m5 10V13m5 6V7" /></svg>
                 Sales
             </button>
         @endcan
@@ -673,6 +723,18 @@ new class extends Component
                     <option value="{{ $item->id }}">{{ $item->name }}</option>
                 @endforeach
             </x-select-input>
+
+            <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days'] as $value => $label)
+                    <button
+                        type="button"
+                        wire:click="$set('rangeFilter', '{{ $value }}')"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $rangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                    >
+                        {{ $label }}
+                    </button>
+                @endforeach
+            </div>
 
             <x-select-input wire:model.live="yearFilter" class="w-full sm:w-32">
                 <option value="">Every year</option>
@@ -749,6 +811,18 @@ new class extends Component
                 @endforelse
             </x-select-input>
 
+            <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days'] as $value => $label)
+                    <button
+                        type="button"
+                        wire:click="$set('supplyRangeFilter', '{{ $value }}')"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $supplyRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                    >
+                        {{ $label }}
+                    </button>
+                @endforeach
+            </div>
+
             <x-select-input wire:model.live="supplyYearFilter" class="w-full sm:w-32">
                 <option value="">Every year</option>
                 @foreach ($supplyAvailableYears as $year)
@@ -805,6 +879,18 @@ new class extends Component
         </p>
 
         <div class="flex flex-wrap items-center gap-3">
+            <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days'] as $value => $label)
+                    <button
+                        type="button"
+                        wire:click="$set('saleRangeFilter', '{{ $value }}')"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $saleRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                    >
+                        {{ $label }}
+                    </button>
+                @endforeach
+            </div>
+
             <x-select-input wire:model.live="saleYearFilter" class="w-full sm:w-32">
                 <option value="">Every year</option>
                 @foreach ($saleAvailableYears as $year)

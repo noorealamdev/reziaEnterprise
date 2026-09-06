@@ -235,6 +235,40 @@ test('changing the sale year clears an incompatible month selection', function (
         ->assertSet('saleMonthFilter', '');
 });
 
+test('the sale quick range filter only counts sales within that window', function () {
+    $user = User::factory()->create();
+
+    EggSale::create(['sale_date' => now()->subDays(3)->toDateString(), 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400]);
+    EggSale::create(['sale_date' => now()->subDays(20)->toDateString(), 'quantity' => 200, 'sale_rate' => 14, 'sale_amount' => 2800]);
+
+    $this->actingAs($user);
+
+    $byWeek = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'sales')
+        ->set('saleRangeFilter', '7');
+    expect($byWeek->viewData('sales'))->toHaveCount(1);
+
+    $byFifteenDays = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'sales')
+        ->set('saleRangeFilter', '15');
+    expect($byFifteenDays->viewData('sales'))->toHaveCount(1);
+});
+
+test('choosing a sale range clears the year and month, and vice versa', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->set('saleYearFilter', '2026')
+        ->set('saleMonthFilter', '3')
+        ->set('saleRangeFilter', '7')
+        ->assertSet('saleYearFilter', '')
+        ->assertSet('saleMonthFilter', '')
+        ->set('saleYearFilter', '2025')
+        ->assertSet('saleRangeFilter', '');
+});
+
 test('a user without egg sales permission cannot see the sales tab or stock summary', function () {
     $staff = User::factory()->staff()->create();
     RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::EggPurchasesView->value]);

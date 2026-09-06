@@ -56,6 +56,49 @@ test('year and month filters narrow the listed purchases', function () {
     expect($component->viewData('availableYears')->all())->toBe([2026, 2025]);
 });
 
+test('the purchases quick range filter only counts purchases within that window', function () {
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+
+    TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => now()->subDays(3)->toDateString(),
+        'quantity' => 400,
+        'cost_rate' => 10,
+        'cost_amount' => 4000,
+    ]);
+    TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => now()->subDays(20)->toDateString(),
+        'quantity' => 500,
+        'cost_rate' => 12,
+        'cost_amount' => 6000,
+    ]);
+
+    $this->actingAs($user);
+
+    $byWeek = Volt::test('egg-purchases.purchase-manager')->set('rangeFilter', '7');
+    expect($byWeek->viewData('purchases'))->toHaveCount(1);
+
+    $byFifteenDays = Volt::test('egg-purchases.purchase-manager')->set('rangeFilter', '15');
+    expect($byFifteenDays->viewData('purchases'))->toHaveCount(1);
+});
+
+test('choosing a purchases range clears the year and month, and vice versa', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->set('yearFilter', '2026')
+        ->set('monthFilter', '3')
+        ->set('rangeFilter', '7')
+        ->assertSet('yearFilter', '')
+        ->assertSet('monthFilter', '')
+        ->set('yearFilter', '2025')
+        ->assertSet('rangeFilter', '');
+});
+
 test('changing the year clears an incompatible month selection', function () {
     $user = User::factory()->create();
 
@@ -340,6 +383,54 @@ test('changing the supply year clears an incompatible month selection', function
         ->set('supplyMonthFilter', '3')
         ->set('supplyYearFilter', '2025')
         ->assertSet('supplyMonthFilter', '');
+});
+
+test('the supply quick range filter only counts entries within that window', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => now()->subDays(3)->toDateString(),
+        'supply_type' => 'Banana',
+        'quantity' => 100,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => now()->subDays(10)->toDateString(),
+        'supply_type' => 'Banana',
+        'quantity' => 500,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('egg-purchases.purchase-manager')
+        ->set('supplyItemFilter', 'Banana')
+        ->set('supplyRangeFilter', '7');
+
+    expect($component->viewData('supplyMonthlyTotal'))->toBe(100.0);
+    expect($component->viewData('supplyDays'))->toHaveCount(1);
+});
+
+test('choosing a supply range clears the year and month, and vice versa', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->set('supplyYearFilter', '2026')
+        ->set('supplyMonthFilter', '3')
+        ->set('supplyRangeFilter', '15')
+        ->assertSet('supplyYearFilter', '')
+        ->assertSet('supplyMonthFilter', '')
+        ->set('supplyYearFilter', '2025')
+        ->assertSet('supplyRangeFilter', '');
 });
 
 test('an accountant can record a purchase but gets a 403 trying to edit or delete one', function () {
