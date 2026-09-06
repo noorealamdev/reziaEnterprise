@@ -155,6 +155,11 @@ new class extends Component
                 Goods Purchased From Them
             </x-secondary-button>
         @endcan
+        @can('company_agreements.view')
+            <x-secondary-button :href="route('company-agreements.index', ['company' => $company->id])" wire:navigate>
+                Agreements
+            </x-secondary-button>
+        @endcan
     </div>
 
     <div>

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Company;
+use App\Models\CompanyAgreement;
 use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\JobEntry;
@@ -479,6 +480,128 @@ test('profit breakdown switches from companies to categories once a single compa
 
     expect($breakdown['byCompany'])->toBeFalse();
     expect($breakdown['rows']->pluck('label')->all())->toBe(['Diesel Oil Supply', 'Daily Basic Labour']);
+});
+
+test('invoice overview breaks down paid, unpaid, signed, and not-invoiced amounts', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $paidInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OVERVIEW-PAID',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->toDateString(),
+    ]);
+    // Signed but still due — proves Signed is independent of payment status.
+    $signedDueInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OVERVIEW-SIGNED-DUE',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'due',
+        'signed_copy_path' => 'signed-invoices/overview-signed-due.pdf',
+    ]);
+    $partialInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OVERVIEW-PARTIAL',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'partial',
+    ]);
+
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => now()->toDateString(), 'bill_amount' => 1000, 'invoice_id' => $paidInvoice->id]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => now()->toDateString(), 'bill_amount' => 500, 'invoice_id' => $signedDueInvoice->id]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => now()->toDateString(), 'bill_amount' => 300, 'invoice_id' => $partialInvoice->id]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => now()->toDateString(), 'bill_amount' => 700]);
+
+    $this->actingAs($user);
+
+    $rows = Volt::test('dashboard.dashboard')->viewData('invoiceOverview')->keyBy('label');
+
+    expect($rows['Paid']['count'])->toBe(1);
+    expect($rows['Paid']['amount'])->toBe(1000.0);
+    expect($rows['Unpaid']['count'])->toBe(2);
+    expect($rows['Unpaid']['amount'])->toBe(800.0);
+    expect($rows['Signed']['count'])->toBe(1);
+    expect($rows['Signed']['amount'])->toBe(500.0);
+    expect($rows['Not Invoiced']['count'])->toBe(1);
+    expect($rows['Not Invoiced']['amount'])->toBe(700.0);
+
+    $this->get('/dashboard')
+        ->assertOk()
+        ->assertSee('Invoice Overview')
+        ->assertSee('1,000.00')
+        ->assertSee('800.00')
+        ->assertSee('500.00')
+        ->assertSee('700.00')
+        ->assertSee('/bill-statement?status=paid', false)
+        ->assertSee('/bill-statement?status=unpaid', false)
+        ->assertSee('/bill-statement?status=signed', false)
+        ->assertSee('/bill-statement?status=unbilled', false);
+});
+
+test('invoice overview cards are not clickable links for a user without Bill Statement access', function () {
+    $staff = User::factory()->staff()->create();
+    RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::DashboardView->value]);
+
+    $this->actingAs($staff)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertSee('Invoice Overview')
+        ->assertDontSee('/bill-statement?status=', false);
+});
+
+test('agreement deadlines list shows expiring and expired agreements but not distant ones', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['name' => 'Ananta Apparels Ltd']);
+
+    $expiring = CompanyAgreement::factory()->create([
+        'company_id' => $company->id,
+        'title' => 'Expiring Soon Agreement',
+        'end_date' => now()->addDays(10)->toDateString(),
+    ]);
+    $expired = CompanyAgreement::factory()->create([
+        'company_id' => $company->id,
+        'title' => 'Already Expired Agreement',
+        'end_date' => now()->subDays(5)->toDateString(),
+    ]);
+    $distant = CompanyAgreement::factory()->create([
+        'company_id' => $company->id,
+        'title' => 'Far Away Agreement',
+        'end_date' => now()->addDays(90)->toDateString(),
+    ]);
+
+    $this->actingAs($user);
+
+    $rows = Volt::test('dashboard.dashboard')->viewData('agreementDeadlines')->pluck('agreement.id');
+
+    expect($rows)->toContain($expiring->id, $expired->id);
+    expect($rows)->not->toContain($distant->id);
+
+    $this->get('/dashboard')
+        ->assertOk()
+        ->assertSee('Agreement Deadlines')
+        ->assertSee('Expiring Soon Agreement')
+        ->assertSee('Already Expired Agreement')
+        ->assertDontSee('Far Away Agreement');
+});
+
+test('a user without company agreements permission does not see the agreement deadlines section', function () {
+    $staff = User::factory()->staff()->create();
+    RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::DashboardView->value]);
+
+    CompanyAgreement::factory()->create(['end_date' => now()->addDays(5)->toDateString()]);
+
+    $this->actingAs($staff)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertDontSee('Agreement Deadlines');
 });
 
 test('daily expense chart shows the window total across several days', function () {

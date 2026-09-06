@@ -78,6 +78,20 @@
             </x-layout.sidebar-link>
         @endcan
 
+        @can('company_agreements.view')
+            <x-layout.sidebar-link :href="route('company-agreements.index')" :active="request()->routeIs('company-agreements.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M7 3.5h7l4 4V19a1.5 1.5 0 0 1-1.5 1.5h-9.5A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z" />
+                        <path d="M14 3.5V7a1 1 0 0 0 1 1h3.5" />
+                        <path d="M8.5 12.5h7M8.5 15.5h5" />
+                        <path d="m8.75 18.25 1 1 2-2" />
+                    </svg>
+                </x-slot:icon>
+                Company Agreements
+            </x-layout.sidebar-link>
+        @endcan
+
         @can('daily_summary.view')
             <x-layout.sidebar-link :href="route('daily-summary.index')" :active="request()->routeIs('daily-summary.*')">
                 <x-slot:icon>
@@ -105,7 +119,7 @@
         @endcan
 
         @can('service_categories.manage')
-            <x-layout.sidebar-link :href="route('service-categories.index')" :active="request()->routeIs(['service-categories.*', 'tiffin-items.*'])">
+            <x-layout.sidebar-link :href="route('service-categories.index')" :active="request()->routeIs(['service-categories.*', 'tiffin-items.*', 'loading-unloading-items.*'])">
                 <x-slot:icon>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="4" y="4" width="7" height="7" rx="1.5" />

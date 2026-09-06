@@ -135,6 +135,63 @@ test('year, month and status filters narrow the rows and their totals', function
     expect($unbilledOnly->viewData('totalBilled'))->toBe(700.0);
 });
 
+test('status filter narrows to paid, unpaid, or signed invoices — matching the Dashboard Invoice Overview links', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $paidInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'STATUS-PAID',
+        'period_start' => '2026-01-01',
+        'period_end' => '2026-01-31',
+        'status' => 'paid',
+        'paid_at' => '2026-01-15',
+    ]);
+    $dueSignedInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'STATUS-DUE-SIGNED',
+        'period_start' => '2026-02-01',
+        'period_end' => '2026-02-28',
+        'status' => 'due',
+        'signed_copy_path' => 'signed-invoices/status-due-signed.pdf',
+    ]);
+    $partialInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'STATUS-PARTIAL',
+        'period_start' => '2026-03-01',
+        'period_end' => '2026-03-31',
+        'status' => 'partial',
+    ]);
+
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-01-10', 'bill_amount' => 1000, 'invoice_id' => $paidInvoice->id]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-02-10', 'bill_amount' => 500, 'invoice_id' => $dueSignedInvoice->id]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-10', 'bill_amount' => 300, 'invoice_id' => $partialInvoice->id]);
+
+    $this->actingAs($user);
+
+    $paidOnly = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->set('statusFilter', 'paid');
+    expect($paidOnly->viewData('rows'))->toHaveCount(1);
+    expect($paidOnly->viewData('totalBilled'))->toBe(1000.0);
+
+    $unpaidOnly = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->set('statusFilter', 'unpaid');
+    expect($unpaidOnly->viewData('rows'))->toHaveCount(2);
+    expect($unpaidOnly->viewData('totalBilled'))->toBe(800.0);
+
+    $signedOnly = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->set('statusFilter', 'signed');
+    expect($signedOnly->viewData('rows'))->toHaveCount(1);
+    expect($signedOnly->viewData('totalBilled'))->toBe(500.0);
+});
+
 test('the year dropdown always offers every year present, even while a year is selected', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -770,12 +827,14 @@ test('the Signed badge is hidden once a bill is fully paid', function () {
     $component->assertSeeHtml('Signed');
     $component->assertSee('AAL-DBL-DUE-1');
 
-    // A paid, signed-only company should render no "Signed" badge at all.
+    // A paid, signed-only company should render no "Signed" badge at all —
+    // "Signed" itself still appears as a status filter option, so this
+    // checks for the badge's own title text, not the bare word.
     Volt::test('bill-statement.bill-statement')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'billed')
         ->set('search', 'PAID-1')
-        ->assertDontSee('Signed');
+        ->assertDontSee('Sent to the factory and signed');
 });
 
 test('the service category filter narrows the rows to just that category', function () {

@@ -27,6 +27,10 @@ enum Permission: string
     case CompanyPurchasesCreate = 'company_purchases.create';
     case CompanyPurchasesModify = 'company_purchases.modify';
 
+    case CompanyAgreementsView = 'company_agreements.view';
+    case CompanyAgreementsCreate = 'company_agreements.create';
+    case CompanyAgreementsModify = 'company_agreements.modify';
+
     case DailySummaryView = 'daily_summary.view';
 
     case ServiceCategoriesManage = 'service_categories.manage';
@@ -73,6 +77,9 @@ enum Permission: string
             self::CompanyPurchasesView => 'View goods purchased from a company',
             self::CompanyPurchasesCreate => 'Record goods purchased from a company',
             self::CompanyPurchasesModify => 'Edit / delete company purchases',
+            self::CompanyAgreementsView => 'View company agreements & deadlines',
+            self::CompanyAgreementsCreate => 'Add company agreements',
+            self::CompanyAgreementsModify => 'Edit / delete company agreements',
             self::DailySummaryView => 'View Daily Summary',
             self::ServiceCategoriesManage => 'Manage service categories & Tiffin items',
             self::BillStatementView => 'View Bill Statement',
@@ -102,6 +109,7 @@ enum Permission: string
             self::EggPurchasesView, self::EggPurchasesCreate, self::EggPurchasesModify => 'Egg Purchases',
             self::EggSalesView, self::EggSalesCreate, self::EggSalesModify => 'Egg Sales',
             self::CompanyPurchasesView, self::CompanyPurchasesCreate, self::CompanyPurchasesModify => 'Company Purchases',
+            self::CompanyAgreementsView, self::CompanyAgreementsCreate, self::CompanyAgreementsModify => 'Company Agreements',
             self::DailySummaryView => 'Daily Summary',
             self::ServiceCategoriesManage => 'Service Categories',
             self::BillStatementView => 'Bill Statement',

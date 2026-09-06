@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Company;
+use App\Models\CompanyAgreement;
 use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\JobEntry;
@@ -115,6 +116,8 @@ new class extends Component
             'monthlyTrend' => $this->monthlyTrend(),
             'companyBreakdown' => $this->companyBreakdown(),
             'dailyExpenseTrend' => $this->dailyExpenseTrend(),
+            'invoiceOverview' => $this->invoiceOverview(),
+            'agreementDeadlines' => $this->agreementDeadlines(),
             ...$this->profit(),
         ];
     }
@@ -152,6 +155,82 @@ new class extends Component
             ...$row,
             'pct' => $this->barPercent($row['total'], $max),
         ]);
+    }
+
+    /**
+     * A single at-a-glance breakdown of where every invoice stands — Paid,
+     * Unpaid (Due + Partially Paid together, since both still owe money),
+     * Signed (a signed copy is on file — independent of payment status, an
+     * invoice can be signed and still unpaid), and Not Invoiced (job entries
+     * with no invoice yet at all). Each entry links straight through to Bill
+     * Statement filtered to that exact status, so the office can actually
+     * open and view those bills rather than just eyeball a total — the
+     * categories overlap (Signed isn't mutually exclusive with Paid/Unpaid)
+     * rather than summing to one whole, so this is a set of filtered counts,
+     * not a stacked chart.
+     *
+     * @return Collection<int, array{label: string, statusValue: string, count: int, amount: float, color: string}>
+     */
+    private function invoiceOverview(): Collection
+    {
+        $rows = collect([
+            [
+                'label' => 'Paid',
+                'statusValue' => 'paid',
+                'count' => Invoice::where('status', 'paid')->count(),
+                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->where('status', 'paid'))->sum('bill_amount'),
+                'color' => 'bg-emerald-500',
+            ],
+            [
+                'label' => 'Unpaid',
+                'statusValue' => 'unpaid',
+                'count' => Invoice::whereIn('status', ['due', 'partial'])->count(),
+                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereIn('status', ['due', 'partial']))->sum('bill_amount'),
+                'color' => 'bg-rose-500',
+            ],
+            [
+                'label' => 'Signed',
+                'statusValue' => 'signed',
+                'count' => Invoice::whereNotNull('signed_copy_path')->count(),
+                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereNotNull('signed_copy_path'))->sum('bill_amount'),
+                'color' => 'bg-sky-500',
+            ],
+            [
+                'label' => 'Not Invoiced',
+                'statusValue' => 'unbilled',
+                'count' => JobEntry::whereNull('invoice_id')->count(),
+                'amount' => (float) JobEntry::whereNull('invoice_id')->sum('bill_amount'),
+                'color' => 'bg-slate-400',
+            ],
+        ]);
+
+        return $rows;
+    }
+
+    /**
+     * Every agreement that's already expired or expiring within the same
+     * lead time the email alert uses (`reports.agreement_deadline_alert_days`)
+     * — an in-app view of the same thing the Super Admin email covers, so
+     * the deadline is visible here even on a day the email never went out
+     * (e.g. SMTP isn't configured yet on a fresh deploy). Already-expired
+     * agreements sort first (most overdue), then soonest-to-expire.
+     *
+     * @return Collection<int, array{agreement: CompanyAgreement, daysRemaining: int, isExpired: bool}>
+     */
+    private function agreementDeadlines(): Collection
+    {
+        $alertCutoff = now()->addDays((int) config('reports.agreement_deadline_alert_days'))->toDateString();
+
+        return CompanyAgreement::with('company')
+            ->whereDate('end_date', '<=', $alertCutoff)
+            ->orderBy('end_date')
+            ->limit(self::BREAKDOWN_LIMIT)
+            ->get()
+            ->map(fn (CompanyAgreement $agreement) => [
+                'agreement' => $agreement,
+                'daysRemaining' => (int) round(now()->diffInDays($agreement->end_date, absolute: true)),
+                'isExpired' => $agreement->is_expired,
+            ]);
     }
 
     /**
@@ -387,6 +466,80 @@ new class extends Component
             </x-slot:icon>
         </x-stat-card>
     </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Invoice Overview</h3>
+            @can('bill_statement.view')
+                <span class="text-xs text-slate-400 dark:text-slate-500">Click a card to view those bills</span>
+            @endcan
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            @foreach ($invoiceOverview as $row)
+                @can('bill_statement.view')
+                    <a
+                        href="{{ route('bill-statement.index', ['status' => $row['statusValue']]) }}"
+                        wire:navigate
+                        class="group flex flex-col gap-1 rounded-lg border border-slate-200 p-3 transition hover:border-brand-300 hover:shadow-sm dark:border-slate-700 dark:hover:border-brand-700"
+                    >
+                        <span class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                            <span class="h-2 w-2 shrink-0 rounded-full {{ $row['color'] }}"></span>
+                            {{ $row['label'] }}
+                        </span>
+                        <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($row['amount'], 2) }}</span>
+                        <span class="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+                            <span>{{ $row['count'] }} {{ Str::plural($row['label'] === 'Not Invoiced' ? 'entry' : 'invoice', $row['count']) }}</span>
+                            <span class="text-brand-600 opacity-0 transition group-hover:opacity-100 dark:text-brand-400">View &rarr;</span>
+                        </span>
+                    </a>
+                @else
+                    <div class="flex flex-col gap-1 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <span class="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                            <span class="h-2 w-2 shrink-0 rounded-full {{ $row['color'] }}"></span>
+                            {{ $row['label'] }}
+                        </span>
+                        <span class="text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($row['amount'], 2) }}</span>
+                        <span class="text-xs text-slate-400 dark:text-slate-500">{{ $row['count'] }} {{ Str::plural($row['label'] === 'Not Invoiced' ? 'entry' : 'invoice', $row['count']) }}</span>
+                    </div>
+                @endcan
+            @endforeach
+        </div>
+    </div>
+
+    @can('company_agreements.view')
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Agreement Deadlines</h3>
+                <a href="{{ route('company-agreements.index') }}" wire:navigate class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                    View all &rarr;
+                </a>
+            </div>
+
+            @if ($agreementDeadlines->isEmpty())
+                <p class="py-6 text-center text-sm text-slate-400 dark:text-slate-500">No agreements are expiring soon.</p>
+            @else
+                <div class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    @foreach ($agreementDeadlines as $row)
+                        <div class="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                            <div class="min-w-0">
+                                <a href="{{ route('companies.show', $row['agreement']->company) }}" wire:navigate class="text-sm font-medium text-slate-800 hover:text-brand-600 dark:text-slate-200 dark:hover:text-brand-400">
+                                    {{ $row['agreement']->company->name }}
+                                </a>
+                                <span class="text-sm text-slate-500 dark:text-slate-400">— {{ $row['agreement']->title }}</span>
+                                <p class="text-xs text-slate-400 dark:text-slate-500">Ends {{ $row['agreement']->end_date->format('d M Y') }}</p>
+                            </div>
+                            @if ($row['isExpired'])
+                                <x-badge color="red">Expired {{ $row['daysRemaining'] }} {{ Str::plural('day', $row['daysRemaining']) }} ago</x-badge>
+                            @else
+                                <x-badge color="amber">{{ $row['daysRemaining'] }} {{ Str::plural('day', $row['daysRemaining']) }} left</x-badge>
+                            @endif
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endcan
 
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">

@@ -208,6 +208,9 @@ new class extends Component
             ->when($this->monthFilter, fn ($rows) => $rows->filter(fn ($row) => $row->period_start->month == $this->monthFilter))
             ->when($this->statusFilter === 'billed', fn ($rows) => $rows->filter(fn ($row) => $row->invoice !== null))
             ->when($this->statusFilter === 'unbilled', fn ($rows) => $rows->filter(fn ($row) => $row->invoice === null))
+            ->when($this->statusFilter === 'paid', fn ($rows) => $rows->filter(fn ($row) => $row->status === 'paid'))
+            ->when($this->statusFilter === 'unpaid', fn ($rows) => $rows->filter(fn ($row) => in_array($row->status, ['due', 'partial'], true)))
+            ->when($this->statusFilter === 'signed', fn ($rows) => $rows->filter(fn ($row) => $row->hasSignedCopy))
             ->when($searchTerm !== '', fn ($rows) => $rows->filter(fn ($row) => $row->invoice !== null
                 && str_contains(strtolower($row->invoice->invoice_number), $searchTerm)))
             ->values();
@@ -300,6 +303,9 @@ new class extends Component
                 <option value="">All statuses</option>
                 <option value="billed">Billed</option>
                 <option value="unbilled">Unbilled</option>
+                <option value="paid">Paid</option>
+                <option value="unpaid">Unpaid</option>
+                <option value="signed">Signed</option>
             </x-select-input>
         </div>
 
