@@ -24,6 +24,7 @@ class JobEntry extends Model
         'style',
         'floor',
         'challan_no',
+        'unit_label',
         'company_adv_payment',
         'quantity',
         'cost_rate',

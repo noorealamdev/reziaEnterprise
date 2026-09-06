@@ -23,6 +23,11 @@ return new class extends Migration
             $table->string('style')->nullable();
             $table->string('floor')->nullable();
             $table->string('challan_no')->nullable();
+            // Only ever set by the Loading Unloading batch entry flow, from
+            // that item's LoadingUnloadingItem.unit_label (e.g. "Cover Van",
+            // "Set", "Person") — stored on the entry itself, not joined back
+            // to the catalog, same as supply_type already is.
+            $table->string('unit_label')->nullable();
             $table->decimal('company_adv_payment', 10, 2)->nullable();
             $table->decimal('quantity', 10, 2)->nullable();
             $table->decimal('cost_rate', 10, 2)->nullable();

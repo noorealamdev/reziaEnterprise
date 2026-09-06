@@ -293,6 +293,9 @@ new class extends Component
                                     @if ($first->challan_no)
                                         Challan {{ $first->challan_no }} ·
                                     @endif
+                                    @if ($first->quantity !== null)
+                                        Qty {{ rtrim(rtrim(number_format((float) $first->quantity, 2), '0'), '.') }}{{ $first->unit_label ? ' '.$first->unit_label : '' }} ·
+                                    @endif
                                     Rate {{ number_format((float) $first->bill_rate, 2) }} ·
                                     Cost {{ number_format((float) $first->cost_amount, 2) }} · Profit {{ number_format((float) $first->profit_amount, 2) }}
                                 </p>

@@ -2,6 +2,7 @@
 
 use App\Models\Company;
 use App\Models\JobEntry;
+use App\Models\LoadingUnloadingItem;
 use App\Models\ServiceCategory;
 use App\Models\TiffinDepartmentItem;
 use App\Models\TiffinItem;
@@ -57,6 +58,17 @@ new class extends Component
     public array $categoryIds = [];
 
     public bool $multiItemMode = false;
+
+    public bool $loadingUnloadingBatchMode = false;
+
+    /** @var array<string, string> Loading Unloading item name => quantity */
+    public array $batchLUQuantities = [];
+
+    /** @var array<string, string> Loading Unloading item name => cost rate */
+    public array $batchLUCostRates = [];
+
+    /** @var array<string, string> Loading Unloading item name => bill rate */
+    public array $batchLUBillRates = [];
 
     /** @var array<int, array<string, string>> tiffin_department_id => item name => value */
     public array $batchQuantities = [];
@@ -129,6 +141,10 @@ new class extends Component
         $this->batchExchangeItemNames = [];
         $this->batchExchangeQuantities = [];
         $this->batchExchangeCostRates = [];
+        $this->loadingUnloadingBatchMode = false;
+        $this->batchLUQuantities = [];
+        $this->batchLUCostRates = [];
+        $this->batchLUBillRates = [];
     }
 
     public function updatedServiceCategoryId(): void
@@ -155,6 +171,7 @@ new class extends Component
         $this->challan_no = null;
         $this->company_adv_payment = null;
         $this->refreshMultiItemMode();
+        $this->refreshLoadingUnloadingBatchMode();
         $this->attemptRateAutoFill();
     }
 
@@ -352,6 +369,43 @@ new class extends Component
     }
 
     /**
+     * Every active Loading Unloading item — or an empty collection if a
+     * batch entry doesn't apply (not Loading Unloading, or editing an
+     * existing entry, which uses the legacy single-entry fields instead,
+     * same convention as Tiffin's tiffinDepartmentsWithItems()).
+     *
+     * @return Collection<int, LoadingUnloadingItem>
+     */
+    private function activeLoadingUnloadingItems(): Collection
+    {
+        $loadingUnloadingId = $this->categoryIds['Loading Unloading'] ?? null;
+
+        if ($this->jobEntry || $loadingUnloadingId === null || $this->service_category_id != $loadingUnloadingId) {
+            return collect();
+        }
+
+        return LoadingUnloadingItem::where('is_active', true)->orderBy('sort_order')->orderBy('name')->get();
+    }
+
+    private function refreshLoadingUnloadingBatchMode(): void
+    {
+        $items = $this->activeLoadingUnloadingItems();
+        $this->loadingUnloadingBatchMode = $items->isNotEmpty();
+
+        $this->batchLUQuantities = [];
+        $this->batchLUCostRates = [];
+        $this->batchLUBillRates = [];
+
+        foreach ($items as $item) {
+            $recent = $this->mostRecentJobEntry($item->name);
+
+            $this->batchLUQuantities[$item->name] = '';
+            $this->batchLUCostRates[$item->name] = $recent ? (string) $recent->cost_rate : '';
+            $this->batchLUBillRates[$item->name] = $recent ? (string) $recent->bill_rate : '';
+        }
+    }
+
+    /**
      * The most recent Job Entry matching the current company/category/
      * department/buyer context for a given supply type — the sole source of
      * "what rate did we last use", now that rates live on entries themselves
@@ -405,7 +459,7 @@ new class extends Component
     {
         Gate::authorize($this->jobEntry ? 'job_entries.modify' : 'job_entries.create');
 
-        if ($this->multiItemMode) {
+        if ($this->multiItemMode || $this->loadingUnloadingBatchMode) {
             return;
         }
 
@@ -432,10 +486,12 @@ new class extends Component
                 Rule::requiredIf(fn () => $this->service_category_id == $embroideryId),
                 'nullable', 'string', 'max:255',
             ],
-            'floor' => [
-                Rule::requiredIf(fn () => $this->service_category_id == $loadingUnloadingId),
-                'nullable', 'string', 'max:255',
-            ],
+            // No longer required for Loading Unloading — new entries for
+            // that category go through the item batch flow instead, which
+            // has no floor concept (a real Loading-Unloading bill never
+            // shows one). Kept nullable only for editing a legacy entry
+            // that already has one set.
+            'floor' => ['nullable', 'string', 'max:255'],
             'challan_no' => ['nullable', 'string', 'max:255'],
             'company_adv_payment' => ['nullable', 'numeric', 'min:0'],
             'quantity' => ['nullable', 'numeric', 'min:0'],
@@ -669,6 +725,84 @@ new class extends Component
         $this->redirect(route('job-entries.index'), navigate: true);
     }
 
+    public function saveLoadingUnloadingBatch(): void
+    {
+        Gate::authorize('job_entries.create');
+
+        $items = $this->activeLoadingUnloadingItems();
+
+        if ($items->isEmpty()) {
+            return;
+        }
+
+        // Only items the user actually typed a quantity for are required —
+        // a day with just 2 of the 7 items (e.g. only "Big" and "Wash Big"
+        // vans came) shouldn't force every other item to be filled in too,
+        // same "touch it to require it" rule Tiffin's batch already uses.
+        $touchedItems = $items->filter(fn ($item) => trim((string) ($this->batchLUQuantities[$item->name] ?? '')) !== '')->values();
+
+        if ($touchedItems->isEmpty()) {
+            $this->addError('batchLUQuantities', 'Enter a quantity for at least one item.');
+
+            return;
+        }
+
+        $rules = [
+            'company_id' => ['required', 'integer', 'exists:companies,id'],
+            'entry_date' => ['required', 'date'],
+        ];
+
+        foreach ($touchedItems as $item) {
+            $rules["batchLUQuantities.{$item->name}"] = ['required', 'numeric', 'min:0'];
+            $rules["batchLUCostRates.{$item->name}"] = ['required', 'numeric', 'min:0'];
+            $rules["batchLUBillRates.{$item->name}"] = ['required', 'numeric', 'min:0'];
+        }
+
+        $this->validate($rules);
+
+        $rows = $touchedItems->map(function (LoadingUnloadingItem $item) {
+            $quantity = (float) $this->batchLUQuantities[$item->name];
+            $costRate = (float) $this->batchLUCostRates[$item->name];
+            $billRate = (float) $this->batchLUBillRates[$item->name];
+
+            return [
+                'name' => $item->name,
+                'unit_label' => $item->unit_label,
+                'quantity' => $quantity,
+                'cost_rate' => $costRate,
+                'bill_rate' => $billRate,
+                'cost_amount' => round($quantity * $costRate, 2),
+                'bill_amount' => round($quantity * $billRate, 2),
+            ];
+        });
+
+        DB::transaction(function () use ($rows) {
+            $inChargeId = $this->resolveInChargeId();
+
+            foreach ($rows as $row) {
+                JobEntry::create([
+                    'company_id' => $this->company_id,
+                    'service_category_id' => $this->service_category_id,
+                    'in_charge_id' => $inChargeId,
+                    'entry_date' => $this->entry_date,
+                    'supply_type' => $row['name'],
+                    'unit_label' => $row['unit_label'],
+                    'quantity' => $row['quantity'],
+                    'cost_rate' => $row['cost_rate'],
+                    'bill_rate' => $row['bill_rate'],
+                    'cost_amount' => $row['cost_amount'],
+                    'bill_amount' => $row['bill_amount'],
+                    'is_off_day' => $this->is_off_day,
+                    'remarks' => $this->remarks,
+                ]);
+            }
+        });
+
+        session()->flash('status', 'Loading Unloading entries created ('.count($rows).').');
+
+        $this->redirect(route('job-entries.index'), navigate: true);
+    }
+
     public function with(): array
     {
         $company = $this->company_id ? Company::find($this->company_id) : null;
@@ -742,6 +876,29 @@ new class extends Component
             && $this->service_category_id == $tiffinId
             && $tiffinDepartmentSections->isEmpty();
 
+        $loadingUnloadingId = $this->categoryIds['Loading Unloading'] ?? null;
+
+        $loadingUnloadingItemSections = $this->activeLoadingUnloadingItems()->map(function (LoadingUnloadingItem $item) {
+            $qty = $this->batchLUQuantities[$item->name] ?? '';
+            $costRate = $this->batchLUCostRates[$item->name] ?? '';
+            $billRate = $this->batchLUBillRates[$item->name] ?? '';
+
+            return (object) [
+                'name' => $item->name,
+                'unitLabel' => $item->unit_label,
+                'costAmount' => (is_numeric($qty) && is_numeric($costRate)) ? round((float) $qty * (float) $costRate, 2) : null,
+                'billAmount' => (is_numeric($qty) && is_numeric($billRate)) ? round((float) $qty * (float) $billRate, 2) : null,
+            ];
+        });
+
+        // Create + Loading Unloading selected, but no active items are
+        // configured yet — nothing to fill in, so block submission and
+        // point at where to add them, same fallback Tiffin already has.
+        $loadingUnloadingBlockedNoItems = ! $this->jobEntry
+            && $loadingUnloadingId !== null
+            && $this->service_category_id == $loadingUnloadingId
+            && $loadingUnloadingItemSections->isEmpty();
+
         return [
             'companies' => Company::orderBy('name')->get(),
             'serviceCategories' => $company ? $company->serviceCategories()->orderBy('sort_order')->get() : collect(),
@@ -758,6 +915,8 @@ new class extends Component
             'tiffinDepartmentSections' => $tiffinDepartmentSections,
             'tiffinBlockedNoDepartments' => $tiffinBlockedNoDepartments,
             'eggBuffer' => $eggBuffer,
+            'loadingUnloadingItemSections' => $loadingUnloadingItemSections,
+            'loadingUnloadingBlockedNoItems' => $loadingUnloadingBlockedNoItems,
         ];
     }
 }; ?>
@@ -823,7 +982,7 @@ new class extends Component
             </div>
         @endif
 
-        <div x-show="$wire.service_category_id != {{ $categoryIds['Tiffin'] ?? 0 }}">
+        <div x-show="$wire.service_category_id != {{ $categoryIds['Tiffin'] ?? 0 }} && ! $wire.loadingUnloadingBatchMode">
             <x-input-label for="supply_type_text" value="Supply Type" />
             <x-text-input wire:model.live.debounce.500ms="supply_type" id="supply_type_text" list="supply-type-suggestions" placeholder="e.g. Local Sand Supply, Daily Basic Labour" class="mt-1 block w-full" required />
             <datalist id="supply-type-suggestions">
@@ -999,6 +1158,89 @@ new class extends Component
             </div>
         @endif
 
+        @if (! $jobEntry)
+            {{-- Create + Loading Unloading: every active item gets its own
+            row (Big, Small, Wash, Machine Set, Daily Labour, etc.), each
+            with its own unit and rate — matches how a real Rezia bill to a
+            factory itemizes the day, one line per vehicle/labour type
+            instead of one lump quantity. An item left blank is skipped. --}}
+            <div x-show="$wire.service_category_id == {{ $categoryIds['Loading Unloading'] ?? 0 }}" x-cloak class="space-y-4">
+                @if ($loadingUnloadingBlockedNoItems)
+                    <p class="text-sm text-slate-500 dark:text-slate-400">
+                        No Loading Unloading items are configured yet. Set them up in
+                        <a href="{{ route('service-categories.index') }}" wire:navigate class="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">Service Categories → Manage Items</a>.
+                    </p>
+                @elseif ($loadingUnloadingItemSections->isNotEmpty())
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Fill in whichever items happened today — leave any item blank to skip it. Rates are pre-filled from the last time each item was entered.
+                    </p>
+
+                    @foreach ($loadingUnloadingItemSections as $item)
+                        <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+                            <div class="flex items-center gap-2">
+                                <p class="text-sm font-medium text-slate-800 dark:text-slate-200">{{ $item->name }}</p>
+                                @if ($item->unitLabel)
+                                    <span class="text-xs text-slate-400 dark:text-slate-500">per {{ $item->unitLabel }}</span>
+                                @endif
+                            </div>
+
+                            <div class="mt-2 grid grid-cols-3 gap-2">
+                                <div>
+                                    <x-input-label :for="'batch_lu_qty_'.$item->name" :value="$item->unitLabel ? 'Quantity ('.$item->unitLabel.')' : 'Quantity'" class="!mb-0 text-xs" />
+                                    <x-text-input
+                                        wire:model.live.debounce.400ms="batchLUQuantities.{{ $item->name }}"
+                                        :id="'batch_lu_qty_'.$item->name"
+                                        type="number" step="0.01" min="0" placeholder="e.g. 18"
+                                        class="mt-1 block w-full text-sm"
+                                    />
+                                    <x-input-error :messages="$errors->get('batchLUQuantities.'.$item->name)" class="mt-1" />
+                                </div>
+                                <div>
+                                    <x-input-label :for="'batch_lu_cost_'.$item->name" value="Cost Rate" class="!mb-0 text-xs" />
+                                    <x-text-input
+                                        wire:model.live.debounce.400ms="batchLUCostRates.{{ $item->name }}"
+                                        :id="'batch_lu_cost_'.$item->name"
+                                        type="number" step="0.01" min="0" placeholder="e.g. 700"
+                                        class="mt-1 block w-full text-sm"
+                                    />
+                                    <x-input-error :messages="$errors->get('batchLUCostRates.'.$item->name)" class="mt-1" />
+                                </div>
+                                <div>
+                                    <x-input-label :for="'batch_lu_bill_'.$item->name" value="Bill Rate" class="!mb-0 text-xs" />
+                                    <x-text-input
+                                        wire:model.live.debounce.400ms="batchLUBillRates.{{ $item->name }}"
+                                        :id="'batch_lu_bill_'.$item->name"
+                                        type="number" step="0.01" min="0" placeholder="e.g. 850"
+                                        class="mt-1 block w-full text-sm"
+                                    />
+                                    <x-input-error :messages="$errors->get('batchLUBillRates.'.$item->name)" class="mt-1" />
+                                </div>
+                            </div>
+
+                            @if ($item->costAmount !== null && $item->billAmount !== null)
+                                <div class="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                                    <div>
+                                        <p class="text-slate-400">Cost</p>
+                                        <p class="font-semibold text-slate-700 dark:text-slate-300">{{ number_format($item->costAmount, 2) }}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-slate-400">Bill</p>
+                                        <p class="font-semibold text-slate-700 dark:text-slate-300">{{ number_format($item->billAmount, 2) }}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-slate-400">Profit</p>
+                                        <p class="font-semibold text-slate-700 dark:text-slate-300">{{ number_format($item->billAmount - $item->costAmount, 2) }}</p>
+                                    </div>
+                                </div>
+                            @endif
+                        </div>
+                    @endforeach
+
+                    <x-input-error :messages="$errors->get('batchLUQuantities')" class="mt-2" />
+                @endif
+            </div>
+        @endif
+
         <div x-show="$wire.service_category_id == {{ $categoryIds['Embroidery & Print'] ?? 0 }}" x-cloak class="space-y-6">
             <div>
                 <x-input-label for="buyer" value="Buyer" />
@@ -1012,11 +1254,17 @@ new class extends Component
             </div>
         </div>
 
-        <div x-show="$wire.service_category_id == {{ $categoryIds['Loading Unloading'] ?? 0 }}" x-cloak>
-            <x-input-label for="floor" value="Floor" />
-            <x-text-input wire:model="floor" id="floor" placeholder="e.g. Mazzanine Floor" class="mt-1 block w-full" />
-            <x-input-error :messages="$errors->get('floor')" class="mt-2" />
-        </div>
+        @if ($jobEntry)
+            {{-- Legacy field — only ever shown editing an old entry that
+            already has a floor set. New Loading Unloading entries go
+            through the item batch flow below instead, which has no floor
+            concept (a real bill never shows one). --}}
+            <div x-show="$wire.service_category_id == {{ $categoryIds['Loading Unloading'] ?? 0 }}" x-cloak>
+                <x-input-label for="floor" value="Floor" />
+                <x-text-input wire:model="floor" id="floor" placeholder="e.g. Mazzanine Floor" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('floor')" class="mt-2" />
+            </div>
+        @endif
 
         <div x-show="$wire.service_category_id == {{ $categoryIds['Diesel Oil Supply'] ?? 0 }}" x-cloak>
             <x-input-label for="challan_no" value="Challan No." />
@@ -1030,8 +1278,8 @@ new class extends Component
             <x-input-error :messages="$errors->get('company_adv_payment')" class="mt-2" />
         </div>
 
-        @unless ($tiffinBlockedNoDepartments)
-        <div x-show="! $wire.multiItemMode" class="space-y-6">
+        @unless ($tiffinBlockedNoDepartments || $loadingUnloadingBlockedNoItems)
+        <div x-show="! $wire.multiItemMode && ! $wire.loadingUnloadingBatchMode" class="space-y-6">
             {{-- ETP Eid Holiday is a one-off, advance-payment-based project —
             there's no meaningful quantity to multiply a rate by, so this
             field is hidden for it and Cost/Bill Amount below are typed in
@@ -1112,7 +1360,17 @@ new class extends Component
                 Save Tiffin Entries
             </button>
 
-            <x-primary-button x-show="! $wire.multiItemMode && {{ $tiffinBlockedNoDepartments ? 'false' : 'true' }}">
+            <button
+                type="button"
+                x-show="$wire.loadingUnloadingBatchMode"
+                x-cloak
+                wire:click="saveLoadingUnloadingBatch"
+                class="inline-flex items-center px-4 py-2 bg-slate-800 dark:bg-slate-200 border border-transparent rounded-md font-semibold text-xs text-white dark:text-slate-800 uppercase tracking-widest hover:bg-slate-700 dark:hover:bg-white focus:bg-slate-700 dark:focus:bg-white active:bg-slate-900 dark:active:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800 transition ease-in-out duration-150"
+            >
+                Save Loading Unloading Entries
+            </button>
+
+            <x-primary-button x-show="! $wire.multiItemMode && ! $wire.loadingUnloadingBatchMode && {{ ($tiffinBlockedNoDepartments || $loadingUnloadingBlockedNoItems) ? 'false' : 'true' }}">
                 {{ $jobEntry ? 'Save Changes' : 'Create Entry' }}
             </x-primary-button>
         </div>

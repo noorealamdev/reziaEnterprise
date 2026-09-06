@@ -3,6 +3,7 @@
 use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\JobEntry;
+use App\Models\LoadingUnloadingItem;
 use App\Models\RolePermission;
 use App\Models\TiffinDepartment;
 use App\Models\TiffinItem;
@@ -208,7 +209,153 @@ test('tiffin department is required for Tiffin category', function () {
         ->assertHasErrors(['tiffin_department_id']);
 });
 
-test('floor is required for Loading Unloading category', function () {
+test('selecting Loading Unloading shows every active item at once', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+    LoadingUnloadingItem::create(['name' => 'Daily Labour', 'unit_label' => 'Person', 'sort_order' => 2]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->assertSet('loadingUnloadingBatchMode', true)
+        ->assertSee('Big')
+        ->assertSee('Daily Labour');
+});
+
+test('filling in two Loading Unloading items on one submission creates entries for both', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    $big = LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+    $labour = LoadingUnloadingItem::create(['name' => 'Daily Labour', 'unit_label' => 'Person', 'sort_order' => 2]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->set("batchLUQuantities.{$big->name}", '18')
+        ->set("batchLUCostRates.{$big->name}", '700')
+        ->set("batchLUBillRates.{$big->name}", '850')
+        ->set("batchLUQuantities.{$labour->name}", '4')
+        ->set("batchLUCostRates.{$labour->name}", '500')
+        ->set("batchLUBillRates.{$labour->name}", '600')
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasNoErrors()
+        ->assertRedirect(route('job-entries.index'));
+
+    $this->assertDatabaseCount('job_entries', 2);
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'supply_type' => 'Big',
+        'unit_label' => 'Cover Van',
+        'quantity' => 18,
+        'cost_amount' => 12600,
+        'bill_amount' => 15300,
+    ]);
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'supply_type' => 'Daily Labour',
+        'unit_label' => 'Person',
+        'quantity' => 4,
+        'cost_amount' => 2000,
+        'bill_amount' => 2400,
+    ]);
+});
+
+test('leaving a Loading Unloading item blank skips it instead of requiring it', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    $big = LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+    LoadingUnloadingItem::create(['name' => 'Small', 'unit_label' => 'Cover Van', 'sort_order' => 2]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->set("batchLUQuantities.{$big->name}", '10')
+        ->set("batchLUCostRates.{$big->name}", '700')
+        ->set("batchLUBillRates.{$big->name}", '850')
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseCount('job_entries', 1);
+    $this->assertDatabaseHas('job_entries', ['supply_type' => 'Big']);
+    $this->assertDatabaseMissing('job_entries', ['supply_type' => 'Small']);
+});
+
+test('the loading unloading batch requires cost and bill rate once an item is touched', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    $big = LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->set("batchLUQuantities.{$big->name}", '10')
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasErrors(["batchLUCostRates.{$big->name}", "batchLUBillRates.{$big->name}"]);
+
+    $this->assertDatabaseCount('job_entries', 0);
+});
+
+test('submitting with every Loading Unloading item left blank shows an error', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasErrors(['batchLUQuantities']);
+
+    $this->assertDatabaseCount('job_entries', 0);
+});
+
+test('an inactive Loading Unloading item is not offered in the batch form', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+    LoadingUnloadingItem::create(['name' => 'Retired Item', 'unit_label' => 'Set', 'is_active' => false, 'sort_order' => 2]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->assertSee('Big')
+        ->assertDontSee('Retired Item');
+});
+
+test('no active Loading Unloading items blocks the create form with a guidance message', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $category = makeServiceCategory('Loading Unloading');
@@ -218,13 +365,38 @@ test('floor is required for Loading Unloading category', function () {
 
     Volt::test('job-entries.job-entry-form')
         ->set('company_id', $company->id)
-        ->set('service_category_id', $category->id)
         ->set('entry_date', now()->toDateString())
-        ->set('supply_type', 'Loading Unloading')
-        ->set('cost_amount', '10')
-        ->set('bill_amount', '15')
+        ->set('service_category_id', $category->id)
+        ->assertSee('No Loading Unloading items are configured yet');
+});
+
+test('editing a legacy Loading Unloading entry still uses the single-entry form with an optional floor', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+
+    $entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'supply_type' => 'Old Style Entry',
+        'quantity' => 5,
+        'cost_rate' => 100,
+        'bill_rate' => 150,
+        'cost_amount' => 500,
+        'bill_amount' => 750,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form', ['jobEntry' => $entry])
+        ->assertSet('loadingUnloadingBatchMode', false)
+        ->set('quantity', '6')
         ->call('save')
-        ->assertHasErrors(['floor']);
+        ->assertHasNoErrors();
+
+    expect((float) $entry->fresh()->quantity)->toBe(6.0);
 });
 
 test('buyer and style are required for Embroidery and Print category', function () {

@@ -53,6 +53,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:service_categories.manage')
         ->name('tiffin-items.index');
 
+    Route::get('loading-unloading-items', fn () => view('loading-unloading-items.index'))
+        ->middleware('can:service_categories.manage')
+        ->name('loading-unloading-items.index');
+
     Route::get('service-categories', fn () => view('service-categories.index'))
         ->middleware('can:service_categories.manage')
         ->name('service-categories.index');
@@ -84,6 +88,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('company-purchases', fn () => view('company-purchases.index'))
         ->middleware('can:company_purchases.view')
         ->name('company-purchases.index');
+
+    Route::get('company-agreements', fn () => view('company-agreements.index'))
+        ->middleware('can:company_agreements.view')
+        ->name('company-agreements.index');
 
     // Bill Statement replaced the standalone Invoices list — this name is
     // kept only so any old link/bookmark to /invoices still lands somewhere

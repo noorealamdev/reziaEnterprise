@@ -206,6 +206,10 @@ new class extends Component
                             <x-secondary-button :href="route('tiffin-items.index')" wire:navigate class="!px-2 !py-1 !text-xs">
                                 Manage Items
                             </x-secondary-button>
+                        @elseif ($category->name === 'Loading Unloading')
+                            <x-secondary-button :href="route('loading-unloading-items.index')" wire:navigate class="!px-2 !py-1 !text-xs">
+                                Manage Items
+                            </x-secondary-button>
                         @endif
                         <x-secondary-button type="button" wire:click="startEdit({{ $category->id }})" class="!px-2 !py-1 !text-xs">
                             Edit
