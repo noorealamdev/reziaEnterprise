@@ -3558,3 +3558,219 @@ filters rather than showing anything with only one set. Verified visually
 for both Tiffin (Swing/Wash Worker batching intact) and Daily Basic
 Labour (plain per-entry rows) against real dev data. 312 tests passing
 (up from 308).
+
+## Egg Purchases & Stock: quick range filter + modern tab UI (done, 2026-09-06)
+
+Client wanted a fast way to see "this week" / "last 15 days" on the
+Purchases, Supply by Item, and Sales tabs instead of drilling into
+Year then Month every time. Added a `rangeFilter` / `supplyRangeFilter`
+/ `saleRangeFilter` property per tab (`''`, `'7'`, or `'15'`), mutually
+exclusive with that tab's existing Year/Month filters via the same
+`updating*()` reset convention already used between Year and Month —
+picking a range clears Year/Month, picking a Year clears the range.
+Purchases and Sales filter an Eloquent query directly
+(`whereDate('...', '>=', ...)`, per the project's established SQLite-safe
+date-comparison convention); Supply by Item filters its in-memory
+`JobEntry` collection the same way its Year/Month filters already did.
+
+Also redesigned the tab bar (Purchases / Supply by Item / Sales) as a
+segmented pill control with icons, and the new range filter as a
+3-way chip group (`All time` / `7 Days` / `15 Days`) instead of a
+third dropdown — both per an explicit "make those tabs modern and
+easy" request. Hit one bug during visual verification: PHP silently
+casts numeric string array keys (`'7'`, `'15'`) to integers, so
+`['' => ..., '7' => ..., '15' => ...]` iterated with `$value` typed
+as `int`, and the chip's `$rangeFilter === $value` active-state check
+(string vs int) never matched even though the underlying filter worked
+correctly — fixed by comparing against `(string) $value`. Rebuilt
+frontend assets (`npm run build`) and verified all three tabs visually
+in a real browser. 6 new tests (range narrows results correctly, and
+range/Year+Month clear each other, for all three tabs). 318 tests
+passing (up from 312).
+
+## Dashboard: Invoice Overview — Paid/Unpaid/Signed/Not Invoiced (done, 2026-09-06)
+
+Client first asked for a "chart" summarizing Paid/Unpaid/Signed/Not
+Invoiced, then immediately redirected: not a chart — the office needs
+to actually click through and *view* the underlying bills, not just
+eyeball a static visualization. Built accordingly: a new
+`invoiceOverview()` method on `dashboard.blade.php` computing 4
+independent counts/amounts (Paid: `Invoice::where('status','paid')`;
+Unpaid: `whereIn('status', ['due','partial'])`, since both still owe
+money; Signed: `whereNotNull('signed_copy_path')`, deliberately
+independent of payment status — an invoice can be signed and still
+unpaid; Not Invoiced: `JobEntry::whereNull('invoice_id')`, reusing the
+existing Unbilled semantics), each rendered as a small card (no bar,
+no percentage) that's a real link straight into Bill Statement
+pre-filtered to that exact status, gated by `@can('bill_statement.view')`
+— a user without that permission sees the same 4 cards as plain,
+non-clickable info instead of a 403.
+
+Bill Statement's `statusFilter` only understood `billed`/`unbilled`
+before this — extended it with `paid`, `unpaid`, and `signed` (filtering
+the same per-row `status`/`hasSignedCopy` fields the table already
+computes) so the new dashboard links actually land somewhere useful.
+One existing Bill Statement test broke as a side effect: it asserted
+the bare word "Signed" was absent from the page, which stopped being
+true once "Signed" became a legitimate status-filter dropdown option —
+fixed by asserting against the signed badge's own title text
+("Sent to the factory and signed") instead of the bare word. 2 new
+Dashboard tests (breakdown counts/amounts, and permission gating) plus
+1 new Bill Statement test covering all three new filter values. 321
+tests passing (up from 318). Verified visually in a real browser —
+clicking "Unpaid" on the dashboard lands on Bill Statement with the
+exact same count and total already filtered in.
+
+## Company Agreements + deadline notifications (done, 2026-09-06)
+
+New feature: a `CompanyAgreement` per company (title, optional start
+date, a required end date/deadline, an optional uploaded document,
+remarks) with full CRUD at `/company-agreements` — same shape as
+Company Purchases (company/status filters, a modal form, a memo-style
+document upload with the identical `documentUrl`/`documentIsPdf`
+accessor pattern, permission-gated Edit/Delete). New permission group
+`company_agreements.view/create/modify`; Accountant gets View+Create by
+default, matching the Egg/Company Purchases convention (create/submit
+only, never edit or delete).
+
+Deadline notification mirrors `SendUnbilledAlerts`/`UnbilledAlert`
+exactly, since that command already solved this same shape of problem
+(recompute daily, dedupe via a resend window, email Super Admins):
+new `report:agreement-deadlines` command + `AgreementDeadlineAlertMail`,
+scheduled daily at 09:00 Asia/Dhaka alongside the existing two reports.
+An agreement qualifies once its end date is within
+`reports.agreement_deadline_alert_days` (default 30) and hasn't been
+alerted on in the last `reports.agreement_deadline_resend_days`
+(default 7) — deduped with a `last_alerted_at` column stored directly
+on the agreement (simpler than a separate table like `UnbilledAlert`,
+since this is one alert stream per agreement, not per company/category
+group). Editing an agreement's end date clears `last_alerted_at` so a
+renewal doesn't get suppressed by a stale "already alerted" timestamp
+from before the renewal.
+
+Also added an in-app "Agreement Deadlines" card to the Dashboard
+(gated by `company_agreements.view`) listing expired and soon-to-expire
+agreements — deliberately not dependent on the email actually arriving,
+since the daily/unbilled report emails already need a working cron
+entry and real SMTP in production to send at all; the in-app card
+still shows the same deadlines regardless of whether that's set up.
+Both the list page and the Dashboard card use
+`(int) round(now()->diffInDays($end, absolute: true))` per
+`.ai/rules/app.md`'s Carbon 3 signed-float warning, not a bare
+`diffInDays()`.
+
+New `CompanyAgreementSeeder` (registered in `DatabaseSeeder`) seeds one
+agreement per state — active (Ananta), expiring soon, and already
+expired (both Simba) — so the feature has something to show without
+manual setup. 19 new tests: `CompanyAgreementManagementTest` (12 —
+CRUD, validation incl. end-date-after-start-date, company/status
+filters, document upload/delete, the last_alerted_at reset on renewal,
+Accountant create-only), `AgreementDeadlineAlertTest` (5, mirroring
+`UnbilledAlertTest`'s exact scenarios), and 2 new Dashboard tests
+(deadline list content, permission gating). 340 tests passing (up from
+321). Verified visually — the Dashboard card and the Company Agreements
+list both render the seeded active/expiring/expired agreements
+correctly, and `migrate:fresh --seed --force` runs clean end to end.
+
+## Loading Unloading: per-item batch entry, from a real Simba bill (done, 2026-09-06)
+
+Client sent a photo of a real Rezia → Simba Fashion bill (Bill No.
+230, Jul-2026, "Loading-Unloading & Daily Basic Labour Supply"): each
+day on it lists several independently-priced line items — Big/Small/
+Wash/Wash Big/Machine Set/Daily Labour/Bosa Gari — each with its own
+unit (Cover Van, Set, or Person), not the single quantity+"Floor" field
+the app previously modeled this category with. Confirmed the
+interpretation in plain language before writing any code (per the
+client's explicit request), then built it to match.
+
+New `LoadingUnloadingItem` catalog (name, unit_label, is_active,
+sort_order) — same shape as `TiffinItem`, seeded from the real bill via
+`LoadingUnloadingItemSeeder`, manageable at
+`/loading-unloading-items` (linked from Service Categories → Manage
+Items, same pattern Tiffin already has). `job_entries` gained a
+nullable `unit_label` column (folded into its existing create
+migration, pre-launch convention) — populated only by this batch flow,
+every other category leaves it null.
+
+`job-entry-form.blade.php` gained a second, independent batch mode
+alongside Tiffin's (`loadingUnloadingBatchMode`, its own
+`saveLoadingUnloadingBatch()`): every active item gets its own
+Quantity/Cost Rate/Bill Rate row, pre-filled from that item's own rate
+history, blank items are skipped, at least one must be touched. Kept
+deliberately simpler than Tiffin's batch — no departments, no egg
+buffer, no exchange item, no purchase lock, since none of those
+concepts exist for Loading Unloading. `floor` is no longer required
+(the real bill never has one) and now only appears at all when editing
+a legacy pre-batch entry; new entries go through the batch form
+exclusively, matching Tiffin's own "no plain-text fallback" precedent
+when nothing is configured. Job Entries list now shows the unit label
+beside quantity (`Qty 18 Cover Van`) for every category, not just this
+one.
+
+One existing test (`floor is required for Loading Unloading category`)
+tested the exact behavior this removed — replaced with 8 new tests
+covering the batch flow (shows all items, saves multiple items
+together, skips blank ones, requires cost/bill rate once touched,
+rejects an all-blank submission, hides inactive items, blocks
+creation with a guidance message when no items are configured, and a
+legacy entry still edits fine with floor optional). 347 tests passing
+(up from 340). Verified visually end-to-end: filled in Big (18 Cover
+Van) and Small (2 Cover Van) for Simba Fashion, saved, and both appear
+as separate Job Entries rows with the correct unit, cost, bill and
+profit — matching the real bill's structure.
+
+## Settings: Personal Ledger — the client's own private side business (done, 2026-09-07)
+
+Client sells goods/oils personally to known contacts at various
+factories, entirely separate from Rezia Enterprise's own business —
+cash only, usually paid off in parts over time rather than all at
+once. Built as a new Settings tab ("Personal Ledger") rather than
+anywhere in the main app, since it isn't Rezia business data at all.
+
+Three new tables — `personal_contacts` (name, factory_name, phone,
+remarks), `personal_sales` (a debit — goods given), `personal_payments`
+(a credit — cash received) — deliberately simpler than the
+CompanyPurchase/InvoicePayment pattern already in this app: a payment
+isn't tied to one specific sale, it just reduces the contact's overall
+running balance (`balanceDue` = sum of sales − sum of payments, live-
+computed, never a stored counter — same anti-drift principle used
+throughout). This matches how the client actually described it: an
+informal running tab per person, not per-transaction reconciliation.
+
+Access is **not** a grantable `Permission` — the client was explicit
+that only he manages this, and a Permission enum entry would let any
+Super Admin hand it to Staff/Accountant via Roles & Permissions.
+Instead added `Gate::define('personal-ledger.manage', fn ($user) =>
+$user->role === UserRole::SuperAdmin)` in `AppServiceProvider`,
+identical in spirit to the existing hard-coded `users.manage` gate
+(never in the grid, never delegable). Every record is additionally
+scoped to `personal_contacts.user_id` (the owning Super Admin) so if a
+second Super Admin ever exists, neither sees the other's contacts,
+sales, or payments — "managed by himself alone" holds even against
+another admin, not just against Staff/Accountant.
+
+New `settings.personal-ledger-manager` Volt component, wired into
+`settings-form.blade.php` as a fourth tab exactly like Users/Roles are
+(no route-level gate — the tab simply doesn't render, and every
+mutating action re-checks the gate server-side). Two internal views:
+Contacts (add/edit/delete, each showing Sold/Paid/Balance Due) and
+Sales & Payments (one merged, date-descending ledger of both, since
+that's the only place the "they pay bits over time" pattern is
+actually visible together — a Sale in amber/+, a Payment in green/−).
+The combined list is paginated with a manually-built
+`LengthAwarePaginator` over a merged-then-sorted Collection (same
+technique Egg Purchases' `supplyDays` already uses), since Sales and
+Payments live in two separate tables with no natural single query to
+paginate across.
+
+8 new tests (`PersonalLedgerManagementTest`): Accountant/Staff can't
+see the tab or invoke its actions (403); full contact/sale/payment
+CRUD with correct balance math; the merged ledger sorts and filters by
+contact correctly; deleting a contact cascades its sales/payments;
+one Super Admin's `findOrFail()` calls throw `ModelNotFoundException`
+against another Super Admin's data rather than ever succeeding; a sale
+can't be recorded against another admin's contact even by ID. 355
+tests passing (up from 347). Verified visually — added a contact,
+recorded a 15,000 sale and a 6,000 cash payment, and the UI showed
+9,000 outstanding everywhere (the summary card, the contact row, and
+the merged ledger) consistently.
