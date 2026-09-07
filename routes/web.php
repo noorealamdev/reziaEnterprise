@@ -104,6 +104,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:invoices.create')
         ->name('invoices.create');
 
+    Route::get('invoices/create-manual', fn () => view('invoices.create-manual'))
+        ->middleware('can:invoices.create')
+        ->name('invoices.create-manual');
+
     Route::get('invoices/{invoice}', fn (Invoice $invoice) => view('invoices.show', [
         'invoice' => $invoice,
     ]))->middleware('can:invoices.view')->name('invoices.show');

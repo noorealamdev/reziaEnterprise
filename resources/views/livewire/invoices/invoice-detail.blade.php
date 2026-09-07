@@ -63,10 +63,9 @@ new class extends Component
      */
     private function amountOwedBeforePayments(): float
     {
-        $entries = $this->invoice->jobEntries;
-        $total = (float) $entries->sum('bill_amount');
+        $total = $this->invoice->subtotal;
         $vatAmount = $this->invoice->vat_percent ? round($total * (float) $this->invoice->vat_percent / 100, 2) : 0;
-        $advancePaid = (float) $entries->sum('company_adv_payment');
+        $advancePaid = (float) $this->invoice->jobEntries->sum('company_adv_payment');
 
         return max(0, $total + $vatAmount - $advancePaid);
     }
@@ -264,62 +263,81 @@ new class extends Component
 
     public function with(): array
     {
-        $entries = $this->invoice->jobEntries()
-            ->with('tiffinDepartment')
-            ->orderBy('entry_date')
-            ->get();
+        $isManual = $this->invoice->manual_amount !== null;
 
-        // Tiffin is billed as one package per day, not per department or
-        // ingredient — one row per date covering every department (Swing,
-        // Wash Worker, ...), quantity/rate driven by whichever item
-        // actually carries the bill (Egg — same math as the Daily Summary
-        // screen), instead of a separate row per department.
-        $rows = $entries->first()?->tiffin_department_id
-            ? $entries->groupBy(fn ($e) => $e->entry_date->toDateString())
-                ->map(function ($batch) {
-                    $first = $batch->first();
-                    // Only Egg's row actually bills (a fixed rate per
-                    // person) — Banana/Bread/any exchange item are cost-
-                    // tracking only. Egg's own *stored* quantity includes
-                    // the always-sent +5 buffer on top of headcount, so the
-                    // billed quantity (and the rate the client actually
-                    // agreed to) come from the billing row's own bill_rate
-                    // and bill_amount instead — never a division that mixes
-                    // the buffered count back in.
-                    $billingEntry = $batch->first(fn ($entry) => (float) $entry->bill_amount > 0);
-                    $billAmount = (float) $batch->sum('bill_amount');
-                    $rate = (float) ($billingEntry->bill_rate ?? 0);
-                    $quantity = $rate > 0 ? round($billAmount / $rate, 2) : (float) ($billingEntry->quantity ?? 0);
-                    $departments = $batch->pluck('tiffinDepartment.name')->unique()->sort()->implode(', ');
-                    $items = $batch->pluck('supply_type')->unique()->sort()->implode(', ');
+        $entries = $isManual
+            ? collect()
+            : $this->invoice->jobEntries()
+                ->with('tiffinDepartment')
+                ->orderBy('entry_date')
+                ->get();
 
-                    return (object) [
-                        'entry_date' => $first->entry_date,
-                        'description' => "{$departments} — {$items}",
-                        'quantity' => $quantity,
-                        'rate' => $rate,
-                        'billAmount' => $billAmount,
-                    ];
-                })
-                ->values()
-            : $entries->map(fn ($entry) => (object) [
-                'entry_date' => $entry->entry_date,
-                'description' => collect([
-                    $entry->supply_type,
-                    $entry->buyer,
-                    $entry->style ? "Style {$entry->style}" : null,
-                    $entry->floor,
-                    $entry->challan_no ? "Challan {$entry->challan_no}" : null,
-                ])->filter()->implode(' — '),
-                'quantity' => (float) $entry->quantity,
-                'rate' => (float) $entry->bill_rate,
-                'billAmount' => (float) $entry->bill_amount,
-            ])->values();
+        if ($isManual) {
+            // No job entries behind a manually-entered past bill — a
+            // single synthetic row carries the typed-in amount, so the
+            // print table below needs no separate branch for it.
+            $rows = collect([(object) [
+                'entry_date' => $this->invoice->period_start,
+                'description' => $this->invoice->manual_description ?: 'Manual bill entry',
+                'quantity' => 1.0,
+                'rate' => $this->invoice->subtotal,
+                'billAmount' => $this->invoice->subtotal,
+            ]]);
+        } else {
+            // Tiffin is billed as one package per day, not per department or
+            // ingredient — one row per date covering every department (Swing,
+            // Wash Worker, ...), quantity/rate driven by whichever item
+            // actually carries the bill (Egg — same math as the Daily Summary
+            // screen), instead of a separate row per department.
+            $rows = $entries->first()?->tiffin_department_id
+                ? $entries->groupBy(fn ($e) => $e->entry_date->toDateString())
+                    ->map(function ($batch) {
+                        $first = $batch->first();
+                        // Only Egg's row actually bills (a fixed rate per
+                        // person) — Banana/Bread/any exchange item are cost-
+                        // tracking only. Egg's own *stored* quantity includes
+                        // the always-sent +5 buffer on top of headcount, so the
+                        // billed quantity (and the rate the client actually
+                        // agreed to) come from the billing row's own bill_rate
+                        // and bill_amount instead — never a division that mixes
+                        // the buffered count back in.
+                        $billingEntry = $batch->first(fn ($entry) => (float) $entry->bill_amount > 0);
+                        $billAmount = (float) $batch->sum('bill_amount');
+                        $rate = (float) ($billingEntry->bill_rate ?? 0);
+                        $quantity = $rate > 0 ? round($billAmount / $rate, 2) : (float) ($billingEntry->quantity ?? 0);
+                        $departments = $batch->pluck('tiffinDepartment.name')->unique()->sort()->implode(', ');
+                        $items = $batch->pluck('supply_type')->unique()->sort()->implode(', ');
 
+                        return (object) [
+                            'entry_date' => $first->entry_date,
+                            'description' => "{$departments} — {$items}",
+                            'quantity' => $quantity,
+                            'rate' => $rate,
+                            'billAmount' => $billAmount,
+                        ];
+                    })
+                    ->values()
+                : $entries->map(fn ($entry) => (object) [
+                    'entry_date' => $entry->entry_date,
+                    'description' => collect([
+                        $entry->supply_type,
+                        $entry->buyer,
+                        $entry->style ? "Style {$entry->style}" : null,
+                        $entry->floor,
+                        $entry->challan_no ? "Challan {$entry->challan_no}" : null,
+                    ])->filter()->implode(' — '),
+                    'quantity' => (float) $entry->quantity,
+                    'rate' => (float) $entry->bill_rate,
+                    'billAmount' => (float) $entry->bill_amount,
+                ])->values();
+        }
+
+        // No cost data exists for a manually-entered past bill — an
+        // accepted gap, not something to fake.
         $totalCostAmount = $entries->sum('cost_amount');
         $totalProfitAmount = $entries->sum('profit_amount');
 
-        $total = (float) $entries->sum('bill_amount');
+        $total = $this->invoice->subtotal;
         $vatAmount = $this->invoice->vat_percent ? round($total * (float) $this->invoice->vat_percent / 100, 2) : null;
         $grandTotal = $total + ($vatAmount ?? 0);
         $advancePaid = (float) $entries->sum('company_adv_payment');
@@ -396,8 +414,19 @@ new class extends Component
 <div class="space-y-6">
     <div class="flex flex-wrap items-center justify-between gap-3 print:hidden">
         <div>
-            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ $invoice->invoice_number }}</h2>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
+                {{ $invoice->invoice_number }}
+                @if ($invoice->manual_amount !== null)
+                    <x-badge color="slate">Past Bill</x-badge>
+                @endif
+            </h2>
             <p class="text-sm text-slate-500 dark:text-slate-400">{{ $invoice->serviceCategory->name }} · {{ $invoice->period_start->format('F Y') }}</p>
+            @if ($invoice->manual_description)
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ $invoice->manual_description }}</p>
+            @endif
+            @if ($invoice->remarks)
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ $invoice->remarks }}</p>
+            @endif
         </div>
 
         <div class="flex flex-wrap items-center gap-3">

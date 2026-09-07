@@ -7,6 +7,7 @@ use App\Models\ServiceCategory;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\Rule;
 use Livewire\Volt\Component;
 
 new class extends Component
@@ -16,6 +17,8 @@ new class extends Component
     public ?int $service_category_id = null;
 
     public string $period = '';
+
+    public string $invoice_number = '';
 
     public ?string $vatRate = null;
 
@@ -45,10 +48,11 @@ new class extends Component
     {
         Gate::authorize('invoices.create');
 
-        $this->validate([
+        $validated = $this->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'],
             'service_category_id' => ['required', 'integer', 'exists:service_categories,id'],
             'period' => ['required', 'date_format:Y-m'],
+            'invoice_number' => ['required', 'string', 'max:255', Rule::unique('invoices', 'invoice_number')],
             'vatRate' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
 
@@ -69,7 +73,7 @@ new class extends Component
 
         $company = Company::findOrFail($this->company_id);
         $category = ServiceCategory::findOrFail($this->service_category_id);
-        $invoiceNumber = $this->nextInvoiceNumber($company, $category, $start);
+        $invoiceNumber = trim($validated['invoice_number']);
 
         $invoice = DB::transaction(function () use ($company, $category, $start, $end, $invoiceNumber, $entries) {
             $invoice = Invoice::create([
@@ -91,29 +95,6 @@ new class extends Component
         session()->flash('status', "Invoice {$invoice->invoice_number} created.");
 
         $this->redirect(route('invoices.show', $invoice), navigate: true);
-    }
-
-    /**
-     * A clean, short invoice number: {CompanyCode}-{CategoryCode}-{YYYYMM}
-     * (e.g. AAL-TIF-202608). The category segment keeps it unique now that
-     * a company can have several invoices the same month (one per
-     * category) — without it, two categories billed the same month would
-     * collide and only be told apart by an arbitrary -2 suffix. That
-     * suffix is still kept as a safety net for the rarer case of
-     * generating twice in the same company+category+month (late entries).
-     */
-    private function nextInvoiceNumber(Company $company, ServiceCategory $category, Carbon $periodStart): string
-    {
-        $base = "{$company->code}-{$category->invoice_code}-{$periodStart->format('Ym')}";
-        $number = $base;
-        $suffix = 1;
-
-        while (Invoice::where('invoice_number', $number)->exists()) {
-            $suffix++;
-            $number = "{$base}-{$suffix}";
-        }
-
-        return $number;
     }
 
     public function with(): array
@@ -206,6 +187,12 @@ new class extends Component
             <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">This company has no entries in this category yet.</p>
         @endif
         <x-input-error :messages="$errors->get('period')" class="mt-2" />
+    </div>
+
+    <div>
+        <x-input-label for="invoice_number" value="Invoice Number" />
+        <x-text-input wire:model="invoice_number" id="invoice_number" placeholder="e.g. RE/AAL/L-U/#240/082026" class="mt-1 block w-full" required />
+        <x-input-error :messages="$errors->get('invoice_number')" class="mt-2" />
     </div>
 
     @if ($preview)

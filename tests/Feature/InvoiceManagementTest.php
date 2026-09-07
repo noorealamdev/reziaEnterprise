@@ -45,6 +45,7 @@ test('generating an invoice pulls only unbilled entries within the selected mont
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#1/082026')
         ->call('generate')
         ->assertHasNoErrors();
 
@@ -52,7 +53,7 @@ test('generating an invoice pulls only unbilled entries within the selected mont
     expect($invoice)->not->toBeNull();
     expect($invoice->company_id)->toBe($company->id);
     expect($invoice->service_category_id)->toBe($category->id);
-    expect($invoice->invoice_number)->toBe("AAL-{$category->invoice_code}-202608");
+    expect($invoice->invoice_number)->toBe('RE/AAL/DBL/#1/082026');
     expect($invoice->status)->toBe('due');
     expect($invoice->vat_percent)->toBeNull();
 
@@ -79,6 +80,7 @@ test('entering a VAT rate stores it on the invoice, whatever the percentage', fu
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/Diesel/#1/082026')
         ->set('vatRate', '15')
         ->call('generate')
         ->assertHasNoErrors();
@@ -104,6 +106,7 @@ test('leaving the VAT rate blank stores no VAT on the invoice', function () {
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/Diesel/#2/082026')
         ->call('generate')
         ->assertHasNoErrors();
 
@@ -128,6 +131,7 @@ test('an out-of-range VAT rate is rejected', function () {
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/Diesel/#3/082026')
         ->set('vatRate', '150')
         ->call('generate')
         ->assertHasErrors(['vatRate']);
@@ -160,6 +164,7 @@ test('generating never pulls in a different categorys entries for the same compa
         ->set('company_id', $company->id)
         ->set('service_category_id', $tiffin->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/TIF/#1/082026')
         ->call('generate')
         ->assertHasNoErrors();
 
@@ -195,6 +200,7 @@ test('an off-day entry is included in the invoice but contributes zero to the to
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#2/082026')
         ->call('generate')
         ->assertHasNoErrors();
 
@@ -216,13 +222,14 @@ test('generating with nothing unbilled shows an error and creates no invoice', f
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#3/082026')
         ->call('generate')
         ->assertHasErrors(['period']);
 
     expect(Invoice::count())->toBe(0);
 });
 
-test('generating again for a period that already has an invoice only bills the new entries under a distinct invoice number', function () {
+test('generating again for a period that already has an invoice only bills the new entries', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create(['code' => 'AAL']);
     $category = makeServiceCategory('Daily Basic Labour');
@@ -240,6 +247,7 @@ test('generating again for a period that already has an invoice only bills the n
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#1/082026')
         ->call('generate');
 
     $lateEntry = JobEntry::factory()->create([
@@ -253,14 +261,206 @@ test('generating again for a period that already has an invoice only bills the n
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
         ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#2/082026')
         ->call('generate')
         ->assertHasNoErrors();
 
     expect(Invoice::count())->toBe(2);
     $second = Invoice::orderByDesc('id')->first();
-    expect($second->invoice_number)->toBe("AAL-{$category->invoice_code}-202608-2");
+    expect($second->invoice_number)->toBe('RE/AAL/DBL/#2/082026');
     expect($second->jobEntries()->count())->toBe(1);
     expect($lateEntry->fresh()->invoice_id)->toBe($second->id);
+});
+
+test('generate is rejected without an invoice number, and duplicates are rejected too', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-05',
+        'bill_amount' => 1000,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('period', '2026-08')
+        ->call('generate')
+        ->assertHasErrors(['invoice_number']);
+
+    expect(Invoice::count())->toBe(0);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#1/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $lateEntry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-20',
+        'bill_amount' => 300,
+    ]);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/#1/082026')
+        ->call('generate')
+        ->assertHasErrors(['invoice_number']);
+
+    expect(Invoice::count())->toBe(1);
+    expect($lateEntry->fresh()->invoice_id)->toBeNull();
+});
+
+test('adding a past invoice persists it with a manual amount and no job entries', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.manual-invoice-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('invoice_number', 'OLD-BILL-001')
+        ->set('bill_date', '2026-01-15')
+        ->set('manual_amount', '50000')
+        ->set('manual_description', 'Diesel supply, Jan 2026')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $invoice = Invoice::where('invoice_number', 'OLD-BILL-001')->first();
+    expect($invoice)->not->toBeNull();
+    expect($invoice->company_id)->toBe($company->id);
+    expect((float) $invoice->manual_amount)->toBe(50000.0);
+    expect($invoice->manual_description)->toBe('Diesel supply, Jan 2026');
+    expect($invoice->status)->toBe('due');
+    expect($invoice->jobEntries)->toHaveCount(0);
+});
+
+test('a past invoices detail page shows a single synthetic row for its manual amount', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OLD-BILL-002',
+        'period_start' => '2026-02-01',
+        'period_end' => '2026-02-01',
+        'status' => 'due',
+        'manual_amount' => 25000,
+        'manual_description' => 'Old paper bill',
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->assertSee('Old paper bill')
+        ->assertSee('25,000.00');
+});
+
+test('recording a payment against a past invoice marks it paid, same as a generated one', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OLD-BILL-003',
+        'period_start' => '2026-02-01',
+        'period_end' => '2026-02-01',
+        'status' => 'due',
+        'manual_amount' => 15000,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->call('startRecordPayment')
+        ->set('paymentAmount', '15000')
+        ->set('paymentDate', '2026-02-05')
+        ->call('recordPayment')
+        ->assertHasNoErrors();
+
+    expect($invoice->fresh()->status)->toBe('paid');
+});
+
+test('a past invoices amount is reflected in bill statement and dashboard totals', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OLD-BILL-004',
+        'period_start' => '2026-02-01',
+        'period_end' => '2026-02-01',
+        'status' => 'due',
+        'manual_amount' => 12000,
+    ]);
+
+    $this->actingAs($user);
+
+    $statement = Volt::test('bill-statement.bill-statement')
+        ->assertSee('12,000.00');
+    expect($statement)->not->toBeNull();
+
+    $dashboard = Volt::test('dashboard.dashboard');
+    expect($dashboard->viewData('billedTotal'))->toBeGreaterThanOrEqual(12000.0);
+});
+
+test('a duplicate invoice number is rejected when adding a past invoice', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'DUP-001',
+        'period_start' => '2026-01-01',
+        'period_end' => '2026-01-01',
+        'status' => 'due',
+        'manual_amount' => 1000,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.manual-invoice-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('invoice_number', 'DUP-001')
+        ->set('bill_date', '2026-01-20')
+        ->set('manual_amount', '2000')
+        ->call('save')
+        ->assertHasErrors(['invoice_number']);
+});
+
+test('a user without invoices.create permission gets a 403 adding a past invoice', function () {
+    $accountant = User::factory()->accountant()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+
+    $this->actingAs($accountant);
+
+    Volt::test('invoices.manual-invoice-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('invoice_number', 'FORBIDDEN-001')
+        ->set('bill_date', '2026-01-20')
+        ->set('manual_amount', '2000')
+        ->call('save')
+        ->assertForbidden();
 });
 
 test('the invoice shows one row per day instead of one per item', function () {
@@ -303,6 +503,26 @@ test('the invoice shows one row per day instead of one per item', function () {
         ->assertSee('1,050.00')
         // Item names are named beside the department, not as separate rows
         ->assertSee('Banana, Egg', false);
+});
+
+test('an invoices remarks is shown on its detail page when set', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'TEST-REMARKS',
+        'period_start' => '2026-08-01',
+        'period_end' => '2026-08-31',
+        'status' => 'due',
+        'remarks' => 'Client requested this be sent via courier, not email',
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->assertSee('Client requested this be sent via courier, not email');
 });
 
 test('the invoice combines every department for the same day into a single row', function () {

@@ -20,6 +20,11 @@ return new class extends Migration
             $table->date('period_end');
             $table->string('status')->default('due');
             $table->decimal('vat_percent', 5, 2)->nullable();
+            // Set together, only for a manually-entered past bill (one
+            // pre-dating this app, or issued outside the normal Job Entry
+            // flow) — null for every normal, job-entry-generated invoice.
+            $table->decimal('manual_amount', 12, 2)->nullable();
+            $table->string('manual_description')->nullable();
             $table->date('paid_at')->nullable();
             $table->text('remarks')->nullable();
             $table->string('signed_copy_path')->nullable();
