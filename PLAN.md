@@ -4106,3 +4106,69 @@ New test in `DashboardTest`: a large current-month group and a tiny
 stale one from last month — the stale one sorts first, is flagged
 `isOverdue`, and renders before the other in the actual page HTML
 (`assertSeeInOrder`). 405 tests passing overall.
+
+## Production readiness: trusted proxies, and a real seeder for go-live (done, 2026-09-07)
+
+Ahead of deploying to a Contabo VPS via Coolify. Added
+`$middleware->trustProxies(at: '*')` in `bootstrap/app.php` — without it
+the app can't tell it's behind Coolify's HTTPS-terminating reverse
+proxy, so secure cookies and `url()`/`route()` can silently misbehave
+on a live domain even though everything works locally.
+
+`DatabaseSeeder` mixes real setup data (service categories, Tiffin/
+Loading-Unloading catalog items, role permissions, and the two real
+clients — Ananta Apparels Ltd and Simba Fashion, both built from the
+client's actual spreadsheet/arrangement) with entirely fabricated demo
+data (seeded job entries, egg stock, Simba's illustrative purchase/
+invoice history, company agreements, personal ledger contacts, and a
+`test@example.com` user) — fine for local dev, wrong for going live.
+
+New `ProductionSeeder` calls only the real-data seeders (`AdminUserSeeder`,
+`RolePermissionSeeder`, `ServiceCategorySeeder`, `TiffinDepartmentSeeder`,
+`TiffinItemSeeder`, `LoadingUnloadingItemSeeder`, `CompanySeeder`) — the
+two real companies land with zero job entries/purchases/agreements
+against them, ready for day-to-day entry from a clean slate. Production
+setup runs `php artisan db:seed --class=ProductionSeeder --force`
+instead of `migrate --seed`. The admin account it creates still uses
+its local-dev placeholder password — must be changed immediately after
+first login in production, before any real data is entered.
+
+Also added two root-level audit documents this session (not yet
+committed to `.ai/rules`): `CONVENTIONS_REPORT.md` (a full sweep of
+verified house conventions) and `PRODUCTION_READINESS.md` (deployment
+checklist — persistent storage volume for uploaded documents, cron for
+the scheduled report emails, production `.env` values, etc.).
+
+New test `ProductionSeederTest`: confirms every real-data table is
+populated and every demo/dummy table stays empty after running
+`ProductionSeeder`. 406 tests passing overall.
+
+## Accountant can never be granted an edit/delete permission (done, 2026-09-07)
+
+`RolePermissionSeeder` already documented the intent ("Accountant can
+create/submit everything... but never edit or delete"), but nothing
+actually enforced it — the Roles & Permissions screen showed every
+permission, including every `*.modify`/`*.manage` one, as a checkbox a
+Super Admin could tick for Accountant. Made it structural instead of a
+seeding convention that only holds as long as nobody touches that
+screen:
+
+Added `Permission::isAccountantEligible()` — a suffix check
+(`!ends_with('.modify') && !ends_with('.manage')`) rather than a
+hand-maintained list, so it automatically covers any future permission
+that follows the same `{domain}.{view|create|modify|manage}` naming
+already used throughout. The Accountant column on
+`role-permissions-manager.blade.php` now only renders eligible
+checkboxes — but hiding a checkbox isn't a security boundary on its
+own (a Livewire property update can still target a property that was
+never rendered), so `saveAccountant()` re-filters through the same
+check server-side before writing anything, same "don't trust the
+client, re-check authoritatively" discipline used everywhere else in
+this app (Tiffin purchase-rate locks, cash-payment caps, etc.).
+Staff's column is untouched — Staff can still be granted anything, by
+design.
+
+2 new tests: the Accountant grid never contains an ineligible
+permission; setting `accountantGrants.JobEntriesModify` directly
+(bypassing the hidden checkbox entirely) and calling `saveAccountant()`
+still doesn't grant it. 408 tests passing overall.
