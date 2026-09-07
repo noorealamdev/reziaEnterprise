@@ -17,7 +17,7 @@ class JobEntry extends Model
         'company_id',
         'service_category_id',
         'tiffin_department_id',
-        'in_charge_id',
+        'in_charge',
         'entry_date',
         'supply_type',
         'buyer',
@@ -74,11 +74,6 @@ class JobEntry extends Model
     public function tiffinDepartment(): BelongsTo
     {
         return $this->belongsTo(TiffinDepartment::class);
-    }
-
-    public function inCharge(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'in_charge_id');
     }
 
     public function invoice(): BelongsTo

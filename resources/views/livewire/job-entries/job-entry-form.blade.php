@@ -7,7 +7,6 @@ use App\Models\ServiceCategory;
 use App\Models\TiffinDepartmentItem;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
-use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -24,7 +23,7 @@ new class extends Component
 
     public ?int $tiffin_department_id = null;
 
-    public string $inChargeSelection = '';
+    public ?string $in_charge = null;
 
     public string $entry_date = '';
 
@@ -106,7 +105,7 @@ new class extends Component
             $this->company_id = $entry->company_id;
             $this->service_category_id = $entry->service_category_id;
             $this->tiffin_department_id = $entry->tiffin_department_id;
-            $this->inChargeSelection = $entry->in_charge_id ? (string) $entry->in_charge_id : '';
+            $this->in_charge = $entry->in_charge;
             $this->entry_date = $entry->entry_date->format('Y-m-d');
             $this->supply_type = $entry->supply_type;
             $this->buyer = $entry->buyer;
@@ -168,7 +167,6 @@ new class extends Component
         $this->buyer = null;
         $this->style = null;
         $this->floor = null;
-        $this->challan_no = null;
         $this->company_adv_payment = null;
         $this->refreshMultiItemMode();
         $this->refreshLoadingUnloadingBatchMode();
@@ -450,11 +448,6 @@ new class extends Component
         }
     }
 
-    private function resolveInChargeId(): ?int
-    {
-        return $this->inChargeSelection !== '' ? (int) $this->inChargeSelection : null;
-    }
-
     public function save(): void
     {
         Gate::authorize($this->jobEntry ? 'job_entries.modify' : 'job_entries.create');
@@ -466,7 +459,6 @@ new class extends Component
         $tiffinId = $this->categoryIds['Tiffin'] ?? null;
         $embroideryId = $this->categoryIds['Embroidery & Print'] ?? null;
         $loadingUnloadingId = $this->categoryIds['Loading Unloading'] ?? null;
-        $dieselId = $this->categoryIds['Diesel Oil Supply'] ?? null;
         $etpEidId = $this->categoryIds['ETP Eid Holiday'] ?? null;
 
         $validated = $this->validate([
@@ -501,6 +493,7 @@ new class extends Component
             'bill_amount' => ['required', 'numeric', 'min:0'],
             'is_off_day' => ['boolean'],
             'remarks' => ['nullable', 'string', 'max:2000'],
+            'in_charge' => ['nullable', 'string', 'max:255'],
         ]);
 
         if ($validated['service_category_id'] != $tiffinId) {
@@ -516,10 +509,6 @@ new class extends Component
             $validated['floor'] = null;
         }
 
-        if ($validated['service_category_id'] != $dieselId) {
-            $validated['challan_no'] = null;
-        }
-
         if ($validated['service_category_id'] != $etpEidId) {
             $validated['company_adv_payment'] = null;
         }
@@ -533,6 +522,8 @@ new class extends Component
 
         $validated['supply_type'] = trim($validated['supply_type']);
         $validated['buyer'] = $validated['buyer'] ? trim($validated['buyer']) : null;
+        $validated['in_charge'] = $validated['in_charge'] ? trim($validated['in_charge']) : null;
+        $validated['challan_no'] = $validated['challan_no'] ? trim($validated['challan_no']) : null;
 
         // Defense in depth for the legacy single-entry Tiffin edit path: a
         // purchase-locked item's cost rate must win here too, not just in
@@ -548,8 +539,6 @@ new class extends Component
         }
 
         DB::transaction(function () use ($validated) {
-            $validated['in_charge_id'] = $this->resolveInChargeId();
-
             $jobEntry = $this->jobEntry ?? new JobEntry;
             $jobEntry->fill($validated);
             $jobEntry->save();
@@ -699,14 +688,15 @@ new class extends Component
         }
 
         DB::transaction(function () use ($rows) {
-            $inChargeId = $this->resolveInChargeId();
+            $inCharge = $this->in_charge ? trim($this->in_charge) : null;
+            $challanNo = $this->challan_no ? trim($this->challan_no) : null;
 
             foreach ($rows as $row) {
                 JobEntry::create([
                     'company_id' => $this->company_id,
                     'service_category_id' => $this->service_category_id,
                     'tiffin_department_id' => $row['tiffin_department_id'],
-                    'in_charge_id' => $inChargeId,
+                    'in_charge' => $inCharge,
                     'entry_date' => $this->entry_date,
                     'supply_type' => $row['name'],
                     'quantity' => $row['quantity'],
@@ -715,6 +705,7 @@ new class extends Component
                     'cost_amount' => $row['cost_amount'],
                     'bill_amount' => $row['bill_amount'],
                     'is_off_day' => $this->is_off_day,
+                    'challan_no' => $challanNo,
                     'remarks' => $this->remarks,
                 ]);
             }
@@ -777,13 +768,14 @@ new class extends Component
         });
 
         DB::transaction(function () use ($rows) {
-            $inChargeId = $this->resolveInChargeId();
+            $inCharge = $this->in_charge ? trim($this->in_charge) : null;
+            $challanNo = $this->challan_no ? trim($this->challan_no) : null;
 
             foreach ($rows as $row) {
                 JobEntry::create([
                     'company_id' => $this->company_id,
                     'service_category_id' => $this->service_category_id,
-                    'in_charge_id' => $inChargeId,
+                    'in_charge' => $inCharge,
                     'entry_date' => $this->entry_date,
                     'supply_type' => $row['name'],
                     'unit_label' => $row['unit_label'],
@@ -793,6 +785,7 @@ new class extends Component
                     'cost_amount' => $row['cost_amount'],
                     'bill_amount' => $row['bill_amount'],
                     'is_off_day' => $this->is_off_day,
+                    'challan_no' => $challanNo,
                     'remarks' => $this->remarks,
                 ]);
             }
@@ -903,7 +896,6 @@ new class extends Component
             'companies' => Company::orderBy('name')->get(),
             'serviceCategories' => $company ? $company->serviceCategories()->orderBy('sort_order')->get() : collect(),
             'tiffinDepartments' => $company ? $company->tiffinDepartments()->orderBy('name')->get() : collect(),
-            'inCharges' => User::where('is_active', true)->orderBy('name')->get(),
             'supplyTypeSuggestions' => ($this->company_id && $this->service_category_id)
                 ? JobEntry::where('company_id', $this->company_id)
                     ->where('service_category_id', $this->service_category_id)
@@ -1266,9 +1258,9 @@ new class extends Component
             </div>
         @endif
 
-        <div x-show="$wire.service_category_id == {{ $categoryIds['Diesel Oil Supply'] ?? 0 }}" x-cloak>
+        <div>
             <x-input-label for="challan_no" value="Challan No." />
-            <x-text-input wire:model="challan_no" id="challan_no" placeholder="e.g. 598" class="mt-1 block w-full" />
+            <x-text-input wire:model="challan_no" id="challan_no" placeholder="e.g. 598 (optional)" class="mt-1 block w-full" />
             <x-input-error :messages="$errors->get('challan_no')" class="mt-2" />
         </div>
 
@@ -1330,13 +1322,9 @@ new class extends Component
         </div>
 
         <div>
-            <x-input-label for="inChargeSelection" value="In-Charge" />
-            <x-select-input wire:model.live="inChargeSelection" id="inChargeSelection" class="mt-1 block w-full">
-                <option value="">None</option>
-                @foreach ($inCharges as $inCharge)
-                    <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
-                @endforeach
-            </x-select-input>
+            <x-input-label for="in_charge" value="In-Charge" />
+            <x-text-input wire:model="in_charge" id="in_charge" placeholder="e.g. Mr. Karim" class="mt-1 block w-full" />
+            <x-input-error :messages="$errors->get('in_charge')" class="mt-2" />
         </div>
 
         <div>

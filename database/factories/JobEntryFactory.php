@@ -32,7 +32,7 @@ class JobEntryFactory extends Factory
                     'sort_order' => 0,
                 ])->id,
             'tiffin_department_id' => null,
-            'in_charge_id' => null,
+            'in_charge' => null,
             'entry_date' => now()->toDateString(),
             'supply_type' => fake()->randomElement(['Egg', 'Bread', 'Local Sand Supply', 'Daily Basic Labour']),
             'buyer' => null,

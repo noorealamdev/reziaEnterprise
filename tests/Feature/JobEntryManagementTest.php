@@ -65,6 +65,119 @@ test('list renders a seeded entry and filters by company, category and month', f
         ->assertDontSee('15 Jul 2026');
 });
 
+test('a job entrys remarks is shown on its row in the list', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-15',
+        'remarks' => 'Client asked for an extra worker on this shift',
+    ]);
+
+    $this->actingAs($user)
+        ->get('/job-entries')
+        ->assertOk()
+        ->assertSee('Client asked for an extra worker on this shift');
+});
+
+test('a tiffin batchs shared remarks is shown once under its department, not per item', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Banana',
+        'remarks' => 'Extra batch requested for a visiting buyer',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Egg',
+        'remarks' => 'Extra batch requested for a visiting buyer',
+    ]);
+
+    $html = $this->actingAs($user)
+        ->get('/job-entries')
+        ->assertOk()
+        ->assertSee('Extra batch requested for a visiting buyer')
+        ->getContent();
+
+    expect(substr_count($html, 'Extra batch requested for a visiting buyer'))->toBe(1);
+});
+
+test('a loading unloading batchs items collapse into one card, with shared remarks shown once', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Bosa Gari',
+        'unit_label' => 'Cover Van',
+        'quantity' => 3,
+        'bill_amount' => 2100,
+        'remarks' => 'shipment cost 3000/-',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Daily Labour',
+        'unit_label' => 'Person',
+        'quantity' => 10,
+        'bill_amount' => 6000,
+        'remarks' => 'shipment cost 3000/-',
+    ]);
+
+    $html = $this->actingAs($user)
+        ->get('/job-entries')
+        ->assertOk()
+        ->assertSee('Bosa Gari')
+        ->assertSee('Daily Labour')
+        // Grand total of the card sums both items: 2,100 + 6,000.
+        ->assertSee('8,100.00')
+        ->getContent();
+
+    expect(substr_count($html, 'shipment cost 3000/-'))->toBe(1);
+});
+
+test('a single loading unloading entry on its own still groups as a plain row, not a card', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+
+    $entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Bosa Gari',
+        'remarks' => 'Only one item today',
+    ]);
+
+    $this->actingAs($user);
+
+    $groupedEntries = Volt::test('job-entries.job-entry-list')->viewData('groupedEntries');
+    $rowGroups = $groupedEntries->get('2026-08-15');
+
+    // One card for the day, and that card holds exactly the one entry —
+    // it was never merged into a multi-item batch card.
+    expect($rowGroups)->toHaveCount(1);
+    expect($rowGroups->first())->toHaveCount(1);
+    expect($rowGroups->first()->first()->id)->toBe($entry->id);
+});
+
 test('year filter alone finds every entry in that year, and clears the month when changed', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -95,6 +208,48 @@ test('year filter alone finds every entry in that year, and clears the month whe
         ->assertSet('monthFilter', '');
 });
 
+test('pagination never splits a single date across two pages', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    // A busy day with far more rows than the page size, plus nine other
+    // distinct dates — ten distinct dates in total, exactly one page's
+    // worth, so the busy day's 15 rows must all still land on page 1
+    // together rather than being cut off at a fixed row count.
+    JobEntry::factory()->count(15)->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-09-10',
+    ]);
+
+    foreach (range(1, 9) as $day) {
+        JobEntry::factory()->create([
+            'company_id' => $company->id,
+            'service_category_id' => $category->id,
+            'entry_date' => "2026-09-0{$day}",
+        ]);
+    }
+
+    // An 11th, older distinct date — pushed to page 2.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-20',
+    ]);
+
+    $this->actingAs($user);
+
+    $page1 = Volt::test('job-entries.job-entry-list');
+    expect($page1->viewData('groupedEntries'))->toHaveCount(10);
+    expect($page1->viewData('groupedEntries')['2026-09-10']->flatten(1))->toHaveCount(15);
+    $page1->assertSee('10 Sep 2026')->assertDontSee('20 Aug 2026');
+
+    $page2 = $page1->call('gotoPage', 2);
+    expect($page2->viewData('groupedEntries'))->toHaveCount(1);
+    $page2->assertSee('20 Aug 2026')->assertDontSee('10 Sep 2026');
+});
+
 test('creating a simple entry persists with correct cost, bill and profit amounts', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -122,6 +277,73 @@ test('creating a simple entry persists with correct cost, bill and profit amount
         'bill_amount' => 7000,
         'profit_amount' => 1000,
     ]);
+});
+
+test('challan no. can be set on any category, not just Diesel Oil Supply', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+    $company->serviceCategories()->attach($category);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('entry_date', '2026-08-20')
+        ->set('supply_type', 'Daily Basic Labour')
+        ->set('cost_amount', '10')
+        ->set('bill_amount', '15')
+        ->set('challan_no', ' 598 ')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'challan_no' => '598',
+    ]);
+});
+
+test('challan no. is not wiped when the service category is changed', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('challan_no', '598')
+        ->set('service_category_id', 1)
+        ->assertSet('challan_no', '598');
+});
+
+test('a tiffin batchs challan no. is applied to every entry created and shown once on its card', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+    $company->serviceCategories()->attach($tiffin);
+    $company->tiffinDepartments()->attach($swing);
+    makeTiffinRecipe($swing, ['Banana']);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $tiffin->id)
+        ->set('challan_no', '712')
+        ->set('batchQuantities.'.$swing->id.'.Banana', '100')
+        ->set('batchCostRates.'.$swing->id.'.Banana', '5')
+        ->call('saveTiffinItemBatch')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'tiffin_department_id' => $swing->id,
+        'challan_no' => '712',
+    ]);
+
+    Volt::test('job-entries.job-entry-list')
+        ->assertSee('Challan 712');
 });
 
 test('rate auto-fill populates cost and bill rate from the most recent job entry', function () {
@@ -1217,9 +1439,8 @@ test('editing the buffer-carrying department reverse-computes headcount correctl
     ]);
 });
 
-test('in-charge is selected from an existing active user', function () {
+test('in-charge is typed freely, not selected from a fixed user list', function () {
     $user = User::factory()->create();
-    $inCharge = User::factory()->staff()->create(['name' => 'Mr. Karim']);
     $company = Company::factory()->create();
     $category = makeServiceCategory('Daily Basic Labour');
     $company->serviceCategories()->attach($category);
@@ -1233,24 +1454,14 @@ test('in-charge is selected from an existing active user', function () {
         ->set('supply_type', 'Daily Basic Labour')
         ->set('cost_amount', '10')
         ->set('bill_amount', '15')
-        ->set('inChargeSelection', (string) $inCharge->id)
+        ->set('in_charge', ' Mr. Karim ')
         ->call('save')
         ->assertHasNoErrors();
 
     $this->assertDatabaseHas('job_entries', [
         'company_id' => $company->id,
-        'in_charge_id' => $inCharge->id,
+        'in_charge' => 'Mr. Karim',
     ]);
-});
-
-test('inactive users are not offered as in-charge options', function () {
-    $user = User::factory()->create();
-    User::factory()->staff()->inactive()->create(['name' => 'Retired Supervisor']);
-
-    $this->actingAs($user);
-
-    Volt::test('job-entries.job-entry-form')
-        ->assertDontSee('Retired Supervisor');
 });
 
 test('editing a job entry updates its attributes', function () {

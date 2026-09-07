@@ -4,6 +4,7 @@ use App\Models\Company;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
@@ -111,17 +112,23 @@ new class extends Component
 
         $monthOptions = collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]);
 
-        $jobEntries = JobEntry::query()
-            ->with(['company', 'serviceCategory', 'tiffinDepartment'])
+        $baseQuery = JobEntry::query()
             ->when($this->companyFilter, fn ($query) => $query->where('company_id', $this->companyFilter))
             ->when($this->categoryFilter, fn ($query) => $query->where('service_category_id', $this->categoryFilter))
             ->when($this->yearFilter, fn ($query) => $query->whereYear('entry_date', $this->yearFilter))
             ->when($this->monthFilter, fn ($query) => $query->whereMonth('entry_date', $this->monthFilter))
             ->when($this->itemFilter, fn ($query) => $query->where('supply_type', $this->itemFilter))
             ->when($this->statusFilter === 'billed', fn ($query) => $query->whereNotNull('invoice_id'))
-            ->when($this->statusFilter === 'unbilled', fn ($query) => $query->whereNull('invoice_id'))
+            ->when($this->statusFilter === 'unbilled', fn ($query) => $query->whereNull('invoice_id'));
+
+        // Paginate by distinct date, not by raw row — a day's entries
+        // (e.g. Loading Unloading's whole batch, or Tiffin across every
+        // department) must always land together on one page, however many
+        // rows that day actually has, never split across two pages.
+        $jobEntries = (clone $baseQuery)
+            ->select('entry_date')
+            ->distinct()
             ->orderByDesc('entry_date')
-            ->orderByDesc('id')
             ->simplePaginate(10)
             ->setPath($this->paginationPath)
             ->appends(array_filter([
@@ -133,17 +140,43 @@ new class extends Component
                 'status' => $this->statusFilter,
             ]));
 
+        $pageDates = collect($jobEntries->items())->map(fn (JobEntry $row) => $row->entry_date->toDateString());
+
+        $entriesForGrouping = (clone $baseQuery)
+            ->with(['company', 'serviceCategory', 'tiffinDepartment'])
+            // entry_date is stored with a time component (Laravel's `date`
+            // cast writes the full datetime format), so a raw string
+            // whereIn against $pageDates (plain Y-m-d strings) would never
+            // match — DATE() normalizes both sides.
+            ->whereIn(DB::raw('DATE(entry_date)'), $pageDates)
+            ->orderByDesc('entry_date')
+            ->orderByDesc('id')
+            ->get();
+
         // All Tiffin entries for the same company/day belong under one
         // Tiffin card, regardless of department (Swing/Wash Worker are
         // sub-sections within it) — the factory sees one Tiffin line, not
-        // one per department. Every other category renders one row per
-        // entry, unchanged.
-        $groupedEntries = collect($jobEntries->items())
+        // one per department. Loading Unloading's batch items (Big/Small/
+        // Wash/Machine Set/Daily Labour/Bosa Gari, saved together from one
+        // batch submission) collapse the same way, into one card per
+        // company/day — otherwise their shared remarks repeat on every
+        // single item row, and the day reads as several unrelated entries
+        // instead of one delivery. Every other category renders one row
+        // per entry, unchanged.
+        $groupedEntries = $entriesForGrouping
             ->groupBy(fn (JobEntry $entry) => $entry->entry_date->toDateString())
             ->map(fn ($entriesForDate) => $entriesForDate
-                ->groupBy(fn (JobEntry $entry) => $entry->tiffin_department_id
-                    ? "tiffin-{$entry->company_id}"
-                    : "single-{$entry->id}")
+                ->groupBy(function (JobEntry $entry) {
+                    if ($entry->tiffin_department_id) {
+                        return "tiffin-{$entry->company_id}";
+                    }
+
+                    if ($entry->serviceCategory->name === 'Loading Unloading') {
+                        return "loading-unloading-{$entry->company_id}";
+                    }
+
+                    return "single-{$entry->id}";
+                })
                 ->values());
 
         return [
@@ -243,6 +276,13 @@ new class extends Component
                                             @endcan
                                         </div>
 
+                                        @if ($deptFirst->challan_no)
+                                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Challan {{ $deptFirst->challan_no }}</p>
+                                        @endif
+                                        @if ($deptFirst->remarks)
+                                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $deptFirst->remarks }}</p>
+                                        @endif
+
                                         <div class="mt-1 space-y-1.5">
                                             @foreach ($departmentItems as $item)
                                                 <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -265,6 +305,52 @@ new class extends Component
                                                 </div>
                                             @endforeach
                                         </div>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @elseif ($first->serviceCategory->name === 'Loading Unloading' && $group->count() > 1)
+                        {{-- Loading Unloading's batch items (Big/Small/Wash/Machine
+                        Set/Daily Labour/Bosa Gari) are saved together from one batch
+                        submission sharing the same remarks — one card per
+                        company/day, one row per item, same idea as Tiffin's card
+                        above but flat (no department sub-level). A lone item (e.g.
+                        one left over from before the batch flow existed) still falls
+                        through to the plain single-entry branch below. --}}
+                        <div class="p-4">
+                            <div class="flex flex-wrap items-center justify-between gap-3">
+                                <x-badge color="brand">{{ $first->serviceCategory->name }}</x-badge>
+                                <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $group->sum('bill_amount'), 2) }}</span>
+                            </div>
+
+                            @unless ($companyFilter)
+                                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ $first->company->name }}</p>
+                            @endunless
+
+                            @if ($first->challan_no)
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Challan {{ $first->challan_no }}</p>
+                            @endif
+                            @if ($first->remarks)
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $first->remarks }}</p>
+                            @endif
+
+                            <div class="mt-3 space-y-1.5">
+                                @foreach ($group as $item)
+                                    <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                        <span class="text-slate-600 dark:text-slate-400">
+                                            <span class="font-medium text-slate-700 dark:text-slate-300">{{ $item->supply_type }}</span>
+                                            · Qty {{ rtrim(rtrim(number_format((float) $item->quantity, 2), '0'), '.') }}{{ $item->unit_label ? ' '.$item->unit_label : '' }}
+                                            · Cost {{ number_format((float) $item->cost_amount, 2) }} · Profit {{ number_format((float) $item->profit_amount, 2) }}
+                                        </span>
+                                        <span class="flex items-center gap-2 font-medium text-slate-700 dark:text-slate-300">
+                                            {{ number_format((float) $item->bill_amount, 2) }}
+                                            @unless ($item->isBilled)
+                                                @can('job_entries.modify')
+                                                    <a href="{{ route('job-entries.edit', $item) }}" wire:navigate class="font-normal text-slate-400 hover:text-slate-600 dark:text-slate-400/80 dark:hover:text-slate-300">Edit</a>
+                                                    <button type="button" wire:click="confirmDelete({{ $item->id }})" class="font-normal text-red-400 hover:text-red-600 dark:text-red-400/80 dark:hover:text-red-300">Delete</button>
+                                                @endcan
+                                            @endunless
+                                        </span>
                                     </div>
                                 @endforeach
                             </div>
@@ -299,6 +385,9 @@ new class extends Component
                                     Rate {{ number_format((float) $first->bill_rate, 2) }} ·
                                     Cost {{ number_format((float) $first->cost_amount, 2) }} · Profit {{ number_format((float) $first->profit_amount, 2) }}
                                 </p>
+                                @if ($first->remarks)
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $first->remarks }}</p>
+                                @endif
                             </div>
 
                             <div class="flex shrink-0 items-center gap-4">

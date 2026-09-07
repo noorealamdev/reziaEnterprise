@@ -4,7 +4,6 @@ use App\Models\Company;
 use App\Models\JobEntry;
 use App\Models\TiffinDepartment;
 use App\Models\TiffinItemPurchase;
-use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Volt\Component;
@@ -19,9 +18,11 @@ new class extends Component
 
     public string $entry_date = '';
 
-    public string $inChargeSelection = '';
+    public ?string $in_charge = null;
 
     public bool $is_off_day = false;
+
+    public ?string $challan_no = null;
 
     public ?string $remarks = null;
 
@@ -64,8 +65,9 @@ new class extends Component
 
         $first = $entries->first();
         $this->entry_date = $first->entry_date->format('Y-m-d');
-        $this->inChargeSelection = $first->in_charge_id ? (string) $first->in_charge_id : '';
+        $this->in_charge = $first->in_charge;
         $this->is_off_day = $first->is_off_day;
+        $this->challan_no = $first->challan_no;
         $this->remarks = $first->remarks;
 
         // The +5 Egg buffer is sent once for the whole company's delivery
@@ -147,7 +149,8 @@ new class extends Component
         $this->validate($rules);
 
         DB::transaction(function () {
-            $inChargeId = $this->inChargeSelection !== '' ? (int) $this->inChargeSelection : null;
+            $inCharge = $this->in_charge ? trim($this->in_charge) : null;
+            $challanNo = $this->challan_no ? trim($this->challan_no) : null;
 
             foreach ($this->entryIds as $itemName => $id) {
                 $isEgg = $itemName === 'Egg';
@@ -162,8 +165,9 @@ new class extends Component
 
                 JobEntry::findOrFail($id)->update([
                     'entry_date' => $this->entry_date,
-                    'in_charge_id' => $inChargeId,
+                    'in_charge' => $inCharge,
                     'is_off_day' => $this->is_off_day,
+                    'challan_no' => $challanNo,
                     'remarks' => $this->remarks,
                     'quantity' => $storedQuantity,
                     'cost_rate' => $costRate,
@@ -196,7 +200,6 @@ new class extends Component
             : null;
 
         return [
-            'inCharges' => User::where('is_active', true)->orderBy('name')->get(),
             'purchaseLocks' => $purchaseLocks,
             'eggBuffer' => $eggBuffer,
             'actualEggQuantity' => ($this->carriesEggBuffer && is_numeric($eggQuantity)) ? (float) $eggQuantity + $eggBuffer : null,
@@ -276,13 +279,15 @@ new class extends Component
     </div>
 
     <div>
-        <x-input-label for="inChargeSelection" value="In-Charge" />
-        <x-select-input wire:model="inChargeSelection" id="inChargeSelection" class="mt-1 block w-full">
-            <option value="">None</option>
-            @foreach ($inCharges as $inCharge)
-                <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
-            @endforeach
-        </x-select-input>
+        <x-input-label for="in_charge" value="In-Charge" />
+        <x-text-input wire:model="in_charge" id="in_charge" placeholder="e.g. Mr. Karim" class="mt-1 block w-full" />
+        <x-input-error :messages="$errors->get('in_charge')" class="mt-2" />
+    </div>
+
+    <div>
+        <x-input-label for="challan_no" value="Challan No." />
+        <x-text-input wire:model="challan_no" id="challan_no" placeholder="e.g. 598 (optional)" class="mt-1 block w-full" />
+        <x-input-error :messages="$errors->get('challan_no')" class="mt-2" />
     </div>
 
     <div>
