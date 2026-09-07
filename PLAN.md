@@ -3774,3 +3774,335 @@ tests passing (up from 347). Verified visually — added a contact,
 recorded a 15,000 sale and a 6,000 cash payment, and the UI showed
 9,000 outstanding everywhere (the summary card, the contact row, and
 the merged ledger) consistently.
+
+## Alert system: bottom-right toast popups, replacing the old banner (done, 2026-09-07)
+
+Discovered the old `session('status')`/`session('error')` banner in
+`layouts/app.blade.php` only ever rendered after a genuine full-page
+navigation, because Livewire's AJAX partial re-renders never touch the
+outer layout — only the acting component's own template re-renders.
+That meant the majority of the app's flash-message call sites (every
+modal-based CRUD component that doesn't redirect: Egg Purchases,
+Company Purchases, Personal Ledger, Company Agreements, etc.) never
+actually displayed their confirmation message at all.
+
+Rather than touch every one of those call sites, added a single new
+always-mounted `layout.toast-notifications` Volt component
+(`resources/views/livewire/layout/toast-notifications.blade.php`) that
+polls the session every 1.5s via `wire:poll.1500ms` — plus an instant
+check on `mount()` for redirect-based flows — using
+`session()->pull('status'/'error')` (read-and-forget, since this fires
+from an independent request from whichever one set the flash) to
+convert any component's flash into a Livewire-dispatched `toast`
+browser event. A co-located Alpine.js stack in the same template
+catches it via `x-on:toast.window`, rendering a stacked, auto-
+dismissing (5s), manually-closeable card fixed to the bottom-right
+(full-width bottom bar on mobile). Zero changes needed to any of the
+existing flash call sites. Old inline banner block removed from
+`layouts/app.blade.php`; the new component mounted once, app-wide.
+
+5 new tests (`ToastNotificationsTest`): `mount()` dispatches a success
+toast for a flashed status and clears it from the session; same for an
+error flash; `poll()` doesn't redispatch a toast `mount()` already
+consumed; `poll()` picks up a status flashed after mount (the same-
+page modal case); no dispatch when there's no flash at all. 374 tests
+passing (up from 369).
+
+**Fix (same day)**: every redirect in this app uses `navigate: true`
+(SPA-style, no hard page load), so the 1.5s poll could fire mid-
+transition and `pull()` a flash meant for the destination page while
+still on the old one — showing the toast briefly during the "loading"
+state and never on the landed page. Swapped the `wire:poll` directive
+for a manually-controlled `setInterval` in Alpine that pauses between
+`livewire:navigating` and `livewire:navigated`, so the landed page's
+own `mount()` is reliably the one that reads the flash.
+
+## Job Entries: In-Charge is now typed freely, not picked from a fixed user list (done, 2026-09-07)
+
+Client didn't want In-Charge tied to the app's own User accounts (a
+dropdown of "Admin" / "Test User") — the person actually in charge on
+site that day is often not someone with an app login at all. Replaced
+`job_entries.in_charge_id` (FK to `users`) with a plain
+`job_entries.in_charge` string column, typed in as free text — the
+same pattern Employee.name already uses for salary staff, not a fixed
+list. Touched both places In-Charge is set: the main
+`job-entry-form.blade.php` (single/Tiffin-create/Loading-Unloading-
+create paths) and `tiffin-batch-edit-form.blade.php`. `JobEntry`'s
+`inCharge()` BelongsTo relation removed along with it.
+
+54 tests passing in `JobEntryManagementTest` (one test replaced: "in-
+charge is typed freely" instead of "selected from an existing active
+user"; the now-meaningless "inactive users not offered" test removed).
+368 tests passing overall.
+
+## Egg Sales: Cash/Due tracking + In-Charge, with search (done, 2026-09-07)
+
+Client sells eggs either for cash on the spot or on credit ("due"),
+and wanted that tracked, plus an In-Charge name per sale, searchable.
+
+Kept deliberately simple — a `payment_status` string on `egg_sales`
+('cash' | 'due' | 'paid'), not a partial-payment ledger like Personal
+Ledger or Invoice payments: a sale is either paid at the time (cash)
+or fully outstanding (due) until a one-click `markSalePaid()` flips it
+to paid. New sales default to Cash; editing offers Cash/Due only —
+"Paid" is only ever reached through the dedicated action, never typed
+in directly. Each sale row shows a Cash/Due/Paid badge, and a "Mark
+Paid" button appears only on Due sales.
+
+Added `in_charge` (free text, same pattern as Job Entries' new
+In-Charge field above) plus a `saleInChargeFilter` search box
+(`LIKE` match, `#[Url]`-bound and paginator-safe like every other
+filter on this page) so the office can pull up everything one person
+handled.
+
+3 new tests in `EggStockManagementTest`: sale defaults to Cash and can
+be saved as Due; `markSalePaid` flips Due→Paid (and 403s for an
+Accountant, extending the existing modify-permission test); In-Charge
+shows on the row and narrows the list when searched. 371 tests
+passing overall.
+
+## Job Entries: a date's entries never split across pages (done, 2026-09-07)
+
+First attempt added a manual exact-date filter/picker — client instead
+wanted the existing list to simply never cut a day's entries in half
+across two pages, without a separate picker (removed it). Fixed at the
+pagination level: `job-entry-list.blade.php`'s `with()` now paginates
+over *distinct entry dates* (10 per page) rather than raw rows, then
+fetches every row belonging to that page's dates in a second query —
+so "Monday, 07 Sep 2026" (or any date) always renders complete on one
+page, however many rows it actually has, while every other filter
+(company/category/year/month/item/status) still narrows it exactly as
+before.
+
+Tripped on a pre-existing quirk while building this: `entry_date`'s
+`date` cast reads back as a clean Carbon date, but the value actually
+*written* to the column carries a `00:00:00` time suffix (Laravel's
+`date` cast only formats on read, not on write, unless a custom format
+is set) — a raw `whereIn('entry_date', $dates)` string match against
+plain `Y-m-d` values silently matched nothing. Fixed with
+`whereIn(DB::raw('DATE(entry_date)'), $dates)`, portable between MySQL
+and SQLite like the rest of this file's date handling already is.
+
+One new test in `JobEntryManagementTest` (a 15-entry day plus nine
+single-entry days exactly fill page 1; an 11th, older date is pushed
+to page 2; the busy day's 15 rows all render together, not split).
+379 tests passing overall.
+
+## Egg Purchases: 30 Days added to all three quick-range filters (done, 2026-09-07)
+
+Purchases, Supply by Item, and Sales each had "All time / 7 Days / 15
+Days" quick-range buttons — added "30 Days" to all three (the
+underlying range logic was already generic over any day count, so this
+was purely the button list plus one new test per tab confirming the
+30-day window). 379 tests passing overall.
+
+## Settings: Users can now be deleted (done, 2026-09-07)
+
+Previously Users could only be edited or deactivated, never removed.
+Added a Delete action guarded the same way the existing self-demotion/
+last-Super-Admin protections in `save()` already are: can't delete
+your own account, can't delete the last remaining active Super Admin
+(re-checked authoritatively in `delete()` too, not just in the confirm
+step). Every `created_by` FK to `users` across the app is already
+`nullOnDelete()`, so a deleted user's past purchases, sales, payments,
+invoices and expenses all survive with the name simply unlinked — the
+one exception is `personal_contacts.user_id`, which `cascadeOnDelete()`s
+(Personal Ledger is scoped per Super Admin), so deleting an account
+that owns ledger data permanently erases that ledger too. The confirm
+dialog checks for and flags that case explicitly before the office
+commits to it, rather than it being a silent side effect.
+
+6 new tests in `SettingsManagementTest`: delete unlinks (not cascades)
+a user's past records; self-delete blocked; last-active-Super-Admin
+delete blocked (a different actor than the target, to isolate that
+guard from the self-delete one); deleting a Personal Ledger owner
+flags `confirmingDeleteHasPersonalLedger` and cascades correctly; an
+Accountant gets a 403. 379 tests passing overall.
+
+## Invoices: log an old paper bill directly, without job entries (done, 2026-09-07)
+
+Client has bills predating this app (or issued outside the normal
+flow) and wanted them tracked here too. Planned via EnterPlanMode
+first, since `Invoice` had no stored amount at all before this —
+every total (subtotal, VAT, advance, balance due) was always computed
+live by summing `jobEntries`, duplicated across 4 files with no single
+source of truth (`invoice-detail.blade.php`, `bill-statement.blade.php`,
+`dashboard.blade.php` twice, `SendDailyReport.php`).
+
+Added two nullable columns to `invoices` (folded into its existing
+create migration): `manual_amount`, `manual_description`. A new
+`Invoice::subtotal` accessor is now the one place "how much is this
+invoice for" gets decided — `manual_amount` when set, else the old
+job-entries sum, unchanged. Every one of those 4 files got a small
+patch to read through this accessor (or fall back to `manual_amount`
+directly for the `withSum`-based aggregate queries, which can't reach
+a plain column via the relation sum).
+
+The payoff: **recording a payment, marking Paid, printing, uploading a
+signed-copy scan — none of that needed a single line changed.**
+`refreshInvoiceStatus()` already only depended on the subtotal number
+and `payments()->sum('amount')`, never on job entries directly. A
+manual invoice's workflow is: add it (status starts `due`) → use the
+existing Record Payment button with a backdated date if it was already
+settled → optionally upload a photo of the old paper bill as its
+existing Signed Bill Copy. `invoice-detail.blade.php`'s `with()`
+builds one synthetic line-item row from `manual_description`/
+`subtotal` when there are no job entries, so the print table needs no
+template branching either.
+
+New `invoices.manual-invoice-form` Volt component ("Add Past Invoice",
+next to the existing "Generate Invoice" button on Bill Statement) —
+company, category, a freely-typed invoice number (whatever was on the
+original paper bill, not auto-generated), bill date, amount,
+description, optional VAT/remarks. Same `invoices.create` permission
+as the generate flow, no new Permission case.
+
+Deliberately **not** folded in: the Dashboard's per-company Billed-vs-
+Unbilled bar chart's `unbilledTotal` — a manual invoice is never
+"unbilled" by definition — though its `billedTotal` side was.
+
+7 new tests in `InvoiceManagementTest`: creates with the right amount/
+status/no-job-entries; detail page shows the synthetic row; recording
+a payment marks it paid same as a generated invoice; the amount is
+reflected in Bill Statement and Dashboard's `billedTotal`; duplicate
+invoice numbers rejected; a user without `invoices.create` gets a 403.
+385 tests passing overall.
+
+## Company Purchases: record cash Rezia pays back on a purchase bill (done, 2026-09-07)
+
+Simba Fashion scenario: Rezia buys goods from Simba (`CompanyPurchase`)
+and separately bills Simba for services (`Invoice`) — a Bill Adjustment
+can settle an invoice against a purchase bill's `remainingBalance`
+instead of cash changing hands. But sometimes the purchase bill is
+worth more than whatever's currently owed on invoices, and the
+leftover gets paid to Simba directly in cash — that direction (Rezia
+→ company) had no tracking at all until now; the original Bill
+Adjustment plan explicitly flagged it as future/out-of-scope.
+
+New `company_purchase_payments` table + `CompanyPurchasePayment` model
+(amount, paid_on, remarks, created_by — `restrictOnDelete` on
+`company_purchase_id`, same protection `invoice_payments` already has).
+`CompanyPurchase.remainingBalance` now subtracts both adjustments *and*
+these cash payments — the one place that number is computed, so the
+Bill Adjustment dropdown on `invoice-detail.blade.php` automatically
+reflects a purchase that's been partly settled in cash too, with zero
+changes needed there.
+
+Added to `company-purchases/purchase-manager.blade.php`: a "Pay Cash"
+button (shown only while `remainingBalance > 0`), amount capped at the
+live remaining balance exactly like Bill Adjustment's own validation,
+a small payment list per purchase row with a Remove action. Deleting a
+purchase is now blocked (a friendly message, not a raw FK exception)
+if it has any adjustment or cash payment recorded against it — a gap
+that existed before this (only the DB's `restrictOnDelete` protected
+against adjustments; nothing did for the purchase's own delete flow).
+
+7 new tests in `CompanyPurchaseManagementTest`: recording a payment
+reduces `remainingBalance`; capped correctly even after an adjustment
+already drew it down partway; deleting a payment restores the balance;
+a purchase with a payment can't be deleted; an Accountant gets a 403.
+391 tests passing overall.
+
+**Follow-up (same day)**: added a Money Receipt upload to the cash
+payment form (`receipt_path` on `company_purchase_payments`, folded
+into its own just-added migration since it hadn't shipped yet) — a
+photo/scan as proof the cash was actually handed over, same pattern as
+`CompanyPurchase.memo_path`. Deleting a payment now also deletes its
+receipt file from storage. 2 more tests (upload persists and is
+retrievable; deleting a payment cleans up its file). 393 tests passing
+overall.
+
+## Egg Purchases: track wasted eggs in stock quantity (done, 2026-09-07)
+
+Eggs break/spoil beyond the fixed +5/day buffer already baked into
+Tiffin's own consumption figure — the client wanted that logged
+explicitly so "In Stock Now" stays accurate. New `egg_wastes` table +
+`EggWaste` model (waste_date, quantity, remarks, created_by) — a
+fourth tab ("Waste") on the Egg Purchase & Stock Management page,
+built by mirroring the existing Sales tab's structure closely: quick
+range/year/month filters, create/edit/delete, its own paginator
+(`wastePage`). Gated under the existing `egg_purchases.*` permissions
+rather than a new Permission case, since waste is a stock-loss concept
+tied to Purchases, not a sale.
+
+`stockSummary()`'s formula is now `purchased − consumed − sold −
+wasted`; a new "Wasted" stat card sits in the existing summary grid
+(now 5 columns instead of 4).
+
+8 new tests in `EggStockManagementTest`: waste reduces stock on hand;
+edit/delete round-trip; quantity required; year/month and quick-range
+filters narrow the list; an Accountant can record but not edit/delete;
+the existing stock-summary test extended to include a waste entry in
+its net calculation. 400 tests passing overall.
+
+## Job Entries: Challan No. is now optional on every category (done, 2026-09-07)
+
+Was hard-restricted to Diesel Oil Supply only — hidden via `x-show`,
+and defensively nulled out in `save()` for every other category.
+Removed both: the field now renders unconditionally in
+`job-entry-form.blade.php`, `save()` no longer clears it based on
+category, and `updatedServiceCategoryId()` no longer wipes it when the
+category changes (it isn't a category-specific value anymore, so it
+shouldn't reset like Buyer/Style/Floor do).
+
+Since Tiffin and Loading Unloading create new entries exclusively
+through their batch flows (never `save()` directly), extended
+`saveTiffinItemBatch()`, `saveLoadingUnloadingBatch()`, and
+`tiffin-batch-edit-form.blade.php` the same way `in_charge` already
+works there — one Challan No. per batch submission, applied to every
+row it creates/updates. `job-entry-list.blade.php`'s Tiffin and
+Loading Unloading cards now show it once per card, alongside remarks,
+when set.
+
+4 new tests in `JobEntryManagementTest`: saved on a non-Diesel
+category; survives a category change instead of being wiped; a Tiffin
+batch's Challan No. is applied to every entry it creates and shown
+once on the list card. 403 tests passing overall.
+
+**Follow-up (same day)**: toast alert redesigned for visibility —
+solid `bg-green-600`/`bg-red-600` with white text and a subtle dark
+ring, instead of the original light-tinted-border-on-white card.
+Visual-only change (icon/close-button colors adjusted for contrast
+against the solid background); no server-side dispatch logic touched,
+`ToastNotificationsTest` unchanged and still passing.
+
+## Invoices: Generate Invoice now takes a manually-typed number (done, 2026-09-07)
+
+Client's real invoice numbers follow their own scheme (e.g.
+`RE/AAL/L-U/#240/082026`) that the auto-generated
+`{CompanyCode}-{CategoryCode}-{YYYYMM}` format never matched. Removed
+`nextInvoiceNumber()`/the auto-suffix-on-collision logic entirely —
+`invoice-generate-form.blade.php` now has a required, freely-typed
+Invoice Number field validated unique (`Rule::unique('invoices',
+'invoice_number')`), the same validation the "Add Past Invoice" form
+already uses, so both of this app's two invoice-creation paths now
+work identically on this point.
+
+Rewrote every `InvoiceManagementTest`/`BillStatementTest` case that
+called `generate()` to supply an explicit `invoice_number` (the old
+auto-generated-format assertions no longer apply), and replaced the
+old "distinct suffix on collision" test with one that: rejects
+`generate()` outright with no number typed in, and rejects a second
+attempt that reuses a number already on another invoice. 404 tests
+passing overall.
+
+## Dashboard: flag unbilled work stuck in an already-completed month (done, 2026-09-07)
+
+Client bills every company monthly and wanted assurance nothing gets
+missed. The gap: "Ready to Invoice" grouped unbilled work by company +
+category only, lumping a stale month in with this month's still-
+accumulating entries — a small straggler from two months ago could
+sit buried under a bigger current-month total with nothing to flag it.
+
+`dashboard.blade.php`'s `with()` now also computes each group's
+oldest unbilled entry date and an `isOverdue` flag (true when that
+date falls before the start of the current month — the only real
+"we might be about to miss this" case, since the current month isn't
+over yet and was never going to be billed today anyway). Overdue
+groups sort first regardless of amount, with a red "Since {Month
+Year}" badge next to the category badge.
+
+New test in `DashboardTest`: a large current-month group and a tiny
+stale one from last month — the stale one sorts first, is flagged
+`isOverdue`, and renders before the other in the actual page HTML
+(`assertSeeInOrder`). 405 tests passing overall.
