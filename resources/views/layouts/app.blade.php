@@ -32,21 +32,11 @@
 
                 <!-- Page Content -->
                 <main class="flex-1 p-4 sm:p-6">
-                    @if (session('status'))
-                        <div class="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300">
-                            {{ session('status') }}
-                        </div>
-                    @endif
-
-                    @if (session('error'))
-                        <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300">
-                            {{ session('error') }}
-                        </div>
-                    @endif
-
                     {{ $slot }}
                 </main>
             </div>
         </div>
+
+        <livewire:layout.toast-notifications />
     </body>
 </html>
