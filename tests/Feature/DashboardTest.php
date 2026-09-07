@@ -42,6 +42,42 @@ test('dashboard shows unbilled total and ready-to-invoice companies grouped corr
         ->assertSee('2 entries unbilled');
 });
 
+test('unbilled work left over from an already-completed month is flagged overdue and sorted first', function () {
+    $user = User::factory()->create();
+    $current = Company::factory()->create(['name' => 'Fresh This Month Ltd']);
+    $stale = Company::factory()->create(['name' => 'Missed Last Month Ltd']);
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    // A much bigger total, but entirely within the current, still-open
+    // month — nothing to send yet, so it must not outrank the stale one.
+    JobEntry::factory()->create([
+        'company_id' => $current->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->startOfMonth()->toDateString(),
+        'bill_amount' => 50000,
+    ]);
+
+    // A small amount, but left over from a month that has already ended.
+    JobEntry::factory()->create([
+        'company_id' => $stale->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->subMonthNoOverflow()->startOfMonth()->toDateString(),
+        'bill_amount' => 100,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('dashboard.dashboard');
+    $groups = $component->viewData('readyToInvoice');
+    expect($groups->first()['company']->name)->toBe('Missed Last Month Ltd');
+    expect($groups->first()['isOverdue'])->toBeTrue();
+    expect($groups->last()['isOverdue'])->toBeFalse();
+
+    $this->actingAs($user)
+        ->get('/dashboard')
+        ->assertSeeInOrder(['Missed Last Month Ltd', 'Fresh This Month Ltd']);
+});
+
 test('dashboard excludes already-invoiced entries from the unbilled total', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();

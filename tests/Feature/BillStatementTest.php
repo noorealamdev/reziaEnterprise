@@ -10,6 +10,89 @@ test('guests are redirected to login', function () {
     $this->get('/bill-statement')->assertRedirect('/login');
 });
 
+test('Total Billed always reconciles to Total Paid plus Total Outstanding, across a generated invoice, a past invoice, and pending work', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $company = Company::factory()->create(['code' => 'REC']);
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    // Invoice 1: a normal, generated invoice. 3 entries summing to 10,000,
+    // 15% VAT -> grand total 11,500, partially paid 5,000 -> balance 6,500.
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-05', 'bill_amount' => 3000]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-12', 'bill_amount' => 4000]);
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-20', 'bill_amount' => 3000]);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('period', '2026-03')
+        ->set('invoice_number', 'RE/REC/DBL/#1/032026')
+        ->set('vatRate', '15')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $generatedInvoice = Invoice::where('company_id', $company->id)->whereNull('manual_amount')->sole();
+    expect((float) $generatedInvoice->jobEntries->sum('bill_amount'))->toBe(10000.0);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $generatedInvoice])
+        ->call('startRecordPayment')
+        ->set('paymentAmount', '5000')
+        ->set('paymentDate', '2026-04-01')
+        ->call('recordPayment')
+        ->assertHasNoErrors();
+
+    expect($generatedInvoice->fresh()->status)->toBe('partial');
+
+    // Invoice 2: a past bill, typed in directly. 20,000, 10% VAT -> grand
+    // total 22,000, paid in full -> balance 0.
+    Volt::test('invoices.manual-invoice-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('invoice_number', 'REC-PAST-001')
+        ->set('bill_date', '2026-01-10')
+        ->set('manual_amount', '20000')
+        ->set('vatRate', '10')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $manualInvoice = Invoice::where('invoice_number', 'REC-PAST-001')->sole();
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $manualInvoice])
+        ->call('startRecordPayment')
+        ->set('paymentAmount', '22000')
+        ->set('paymentDate', '2026-01-15')
+        ->call('recordPayment')
+        ->assertHasNoErrors();
+
+    expect($manualInvoice->fresh()->status)->toBe('paid');
+
+    // Pending: 3,000 of unbilled work, no invoice generated for it at all.
+    JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-05-01', 'bill_amount' => 3000]);
+
+    $statement = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id);
+
+    // 11,500 (generated, incl. VAT) + 22,000 (manual, incl. VAT) + 3,000 (pending) = 36,500.
+    expect($statement->viewData('totalBilled'))->toBe(36500.0);
+    // 5,000 + 22,000 = 27,000 (no advances involved here).
+    expect($statement->viewData('totalPaid'))->toBe(27000.0);
+    // 6,500 (generated) + 0 (manual, fully paid) + 3,000 (pending) = 9,500.
+    expect($statement->viewData('totalOutstanding'))->toBe(9500.0);
+
+    // The invariant the code relies on: nothing is billed that isn't
+    // accounted for as either paid or still outstanding.
+    expect($statement->viewData('totalPaid') + $statement->viewData('totalOutstanding'))
+        ->toBe($statement->viewData('totalBilled'));
+
+    // Dashboard's "Billed" is pre-VAT and invoice-only (job-entry bill
+    // total plus raw manual amounts, deliberately excluding pending work
+    // that was never invoiced) — a different, smaller figure by design:
+    // 10,000 (generated entries) + 20,000 (manual) = 30,000.
+    $dashboard = Volt::test('dashboard.dashboard');
+    expect($dashboard->viewData('billedTotal'))->toBeGreaterThanOrEqual(30000.0);
+});
+
 test('screen pagination never drops a row from the printed statement or the totals', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();

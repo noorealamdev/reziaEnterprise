@@ -77,7 +77,7 @@ class SendDailyReport extends Command
             ->withSum('payments as paidViaPayments', 'amount')
             ->get()
             ->sum(function (Invoice $invoice) {
-                $amount = (float) $invoice->amount;
+                $amount = (float) ($invoice->manual_amount ?? $invoice->amount);
                 $vatAmount = $invoice->vat_percent ? round($amount * (float) $invoice->vat_percent / 100, 2) : 0;
 
                 return max(0, $amount + $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);

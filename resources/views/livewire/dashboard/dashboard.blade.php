@@ -38,22 +38,40 @@ new class extends Component
     {
         $unbilled = JobEntry::whereNull('invoice_id')->with(['company', 'serviceCategory'])->get();
 
+        // A company/category is billed monthly — the risk of actually
+        // *missing* a bill is unbilled work sitting in a month that has
+        // already ended, not this month's still-accumulating entries (that
+        // month isn't over yet, so nothing to send for it). Flagged and
+        // sorted first so a straggler from a prior month can never quietly
+        // scroll off the bottom of this list.
+        $currentMonthStart = now()->startOfMonth();
+
         // Invoices are now generated per company *and* category, so a
         // company can have several concurrent bills ready to go the same
         // month — group by both instead of company alone.
         $readyToInvoice = $unbilled
             ->groupBy(fn (JobEntry $entry) => $entry->company_id.'-'.$entry->service_category_id)
-            ->map(fn ($entries) => [
-                'company' => $entries->first()->company,
-                'category' => $entries->first()->serviceCategory,
-                'count' => $entries->count(),
-                'total' => $entries->sum('bill_amount'),
-            ])
+            ->map(function ($entries) use ($currentMonthStart) {
+                $oldestEntryDate = $entries->min('entry_date');
+
+                return [
+                    'company' => $entries->first()->company,
+                    'category' => $entries->first()->serviceCategory,
+                    'count' => $entries->count(),
+                    'total' => $entries->sum('bill_amount'),
+                    'oldestEntryDate' => $oldestEntryDate,
+                    'isOverdue' => $oldestEntryDate->lt($currentMonthStart),
+                ];
+            })
             ->filter(fn ($group) => $group['total'] > 0)
-            ->sortByDesc('total')
+            ->sort(fn ($a, $b) => ($b['isOverdue'] <=> $a['isOverdue']) ?: ($b['total'] <=> $a['total']))
             ->values();
 
-        $billedTotal = (float) JobEntry::whereNotNull('invoice_id')->sum('bill_amount');
+        // A manually-entered past bill has no job entries at all, so its
+        // amount has to be added on separately — it's definitionally
+        // already billed the moment it exists.
+        $billedTotal = (float) JobEntry::whereNotNull('invoice_id')->sum('bill_amount')
+            + (float) Invoice::whereNotNull('manual_amount')->sum('manual_amount');
 
         // Balance still owed per invoice — bill total (+VAT), minus any
         // pre-invoice advance, minus payments recorded against it since. A
@@ -66,7 +84,7 @@ new class extends Component
             ->withSum('payments as paidViaPayments', 'amount')
             ->get()
             ->sum(function (Invoice $invoice) {
-                $amount = (float) $invoice->amount;
+                $amount = (float) ($invoice->manual_amount ?? $invoice->amount);
                 $vatAmount = $invoice->vat_percent ? round($amount * (float) $invoice->vat_percent / 100, 2) : 0;
 
                 return max(0, $amount + $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);
@@ -283,15 +301,25 @@ new class extends Component
      */
     private function companyBreakdown(): array
     {
+        // A manually-entered past bill has no job entries to be picked up
+        // by the withSum below — added on per company here instead. Never
+        // folded into unbilledTotal: a manual invoice is never "unbilled"
+        // by definition.
+        $manualBilledByCompany = Invoice::query()
+            ->whereNotNull('manual_amount')
+            ->selectRaw('company_id, SUM(manual_amount) as total')
+            ->groupBy('company_id')
+            ->pluck('total', 'company_id');
+
         $eligible = Company::query()
             ->withSum(['jobEntries as billedTotal' => fn ($query) => $query->whereNotNull('invoice_id')], 'bill_amount')
             ->withSum(['jobEntries as unbilledTotal' => fn ($query) => $query->whereNull('invoice_id')], 'bill_amount')
             ->get()
             ->map(fn (Company $company) => [
                 'company' => $company,
-                'billed' => (float) $company->billedTotal,
+                'billed' => (float) $company->billedTotal + (float) ($manualBilledByCompany[$company->id] ?? 0),
                 'unbilled' => (float) $company->unbilledTotal,
-                'total' => (float) $company->billedTotal + (float) $company->unbilledTotal,
+                'total' => (float) $company->billedTotal + (float) ($manualBilledByCompany[$company->id] ?? 0) + (float) $company->unbilledTotal,
             ])
             ->filter(fn ($row) => $row['total'] > 0)
             ->sortByDesc('total')
@@ -738,6 +766,9 @@ new class extends Component
                                 {{ $group['company']->name }}
                             </a>
                             <x-badge color="brand" class="ml-1">{{ $group['category']->name }}</x-badge>
+                            @if ($group['isOverdue'])
+                                <x-badge color="red" class="ml-1">Since {{ $group['oldestEntryDate']->format('M Y') }}</x-badge>
+                            @endif
                             <p class="text-xs text-slate-400 dark:text-slate-500">{{ $group['count'] }} {{ Str::plural('entry', $group['count']) }} unbilled</p>
                         </div>
                         <div class="flex items-center gap-4">

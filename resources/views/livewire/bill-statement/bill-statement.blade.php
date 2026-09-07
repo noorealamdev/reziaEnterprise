@@ -115,7 +115,7 @@ new class extends Component
             ->when($this->categoryFilter, fn ($query) => $query->where('service_category_id', $this->categoryFilter))
             ->get()
             ->map(function (Invoice $invoice) {
-                $amount = (float) $invoice->amount;
+                $amount = (float) ($invoice->manual_amount ?? $invoice->amount);
                 $vatAmount = $invoice->vat_percent ? round($amount * (float) $invoice->vat_percent / 100, 2) : 0;
                 $advancePaid = (float) $invoice->advancePaid;
                 $paidViaPayments = (float) $invoice->paidViaPayments;
@@ -315,6 +315,9 @@ new class extends Component
                     Print
                 </x-secondary-button>
             @endif
+            <x-secondary-button :href="route('invoices.create-manual', $selectedCompany ? ['company' => $selectedCompany->id] : [])" wire:navigate>
+                Add Past Invoice
+            </x-secondary-button>
             @if ($selectedCompany)
                 <x-primary-button :href="route('invoices.create', array_filter(['company' => $selectedCompany->id, 'category' => $selectedCategory?->id]))" wire:navigate>
                     Generate Invoice
