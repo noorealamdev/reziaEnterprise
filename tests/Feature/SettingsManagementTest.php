@@ -296,6 +296,46 @@ test('a super admin can grant and revoke role permissions from the roles and per
     expect(Gate::forUser($staff->fresh())->denies('job_entries.create'))->toBeTrue();
 });
 
+test('the accountant column never offers a modify or manage permission to check', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $this->actingAs($superAdmin);
+
+    $component = Volt::test('settings.role-permissions-manager');
+    $accountantGroups = $component->viewData('accountantGroupedPermissions');
+
+    foreach ($accountantGroups as $permissions) {
+        foreach ($permissions as $permission) {
+            expect($permission->isAccountantEligible())->toBeTrue();
+        }
+    }
+
+    // The unrestricted grid (Staff's column) still offers everything —
+    // proves the filtering is Accountant-specific, not a global change.
+    expect($component->viewData('groupedPermissions'))->not->toBe($accountantGroups);
+});
+
+test('granting a modify permission to accountant is rejected even if sent directly, not just hidden in the UI', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $accountant = User::factory()->accountant()->create();
+    $this->actingAs($superAdmin);
+
+    // Bypasses the Blade checkbox entirely — sets the underlying property
+    // the same way a crafted Livewire request could, proving the
+    // restriction is enforced in saveAccountant() itself.
+    Volt::test('settings.role-permissions-manager')
+        ->set('accountantGrants.'.Permission::JobEntriesModify->name, true)
+        ->set('accountantGrants.'.Permission::JobEntriesCreate->name, true)
+        ->call('saveAccountant')
+        ->assertHasNoErrors();
+
+    expect(Gate::forUser($accountant->fresh())->denies('job_entries.modify'))->toBeTrue();
+    expect(Gate::forUser($accountant->fresh())->allows('job_entries.create'))->toBeTrue();
+    $this->assertDatabaseMissing('role_permissions', [
+        'role' => UserRole::Accountant->value,
+        'permission' => 'job_entries.modify',
+    ]);
+});
+
 test('the users list paginates once there are more than one page\'s worth', function () {
     $superAdmin = User::factory()->create();
 

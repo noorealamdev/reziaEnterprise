@@ -39,7 +39,12 @@ new class extends Component
 
     public function saveAccountant(): void
     {
-        $this->saveRole(UserRole::Accountant, $this->accountantGrants);
+        // Hiding the Modify/Manage checkboxes below isn't a security
+        // boundary on its own — a Livewire property update could still be
+        // sent for a checkbox that was never rendered. Re-checked here so
+        // Accountant can never end up with one regardless of what the
+        // client actually sent.
+        $this->saveRole(UserRole::Accountant, $this->accountantGrants, onlyIf: fn (Permission $permission) => $permission->isAccountantEligible());
     }
 
     public function saveStaff(): void
@@ -50,12 +55,13 @@ new class extends Component
     /**
      * @param  array<string, bool>  $grants
      */
-    private function saveRole(UserRole $role, array $grants): void
+    private function saveRole(UserRole $role, array $grants, ?\Closure $onlyIf = null): void
     {
         Gate::authorize('users.manage');
 
         $granted = collect(Permission::cases())
             ->filter(fn (Permission $permission) => $grants[$permission->name] ?? false)
+            ->when($onlyIf !== null, fn ($permissions) => $permissions->filter($onlyIf))
             ->map(fn (Permission $permission) => $permission->value)
             ->all();
 
@@ -70,8 +76,17 @@ new class extends Component
 
     public function with(): array
     {
+        $accountantGroupedPermissions = collect(Permission::grouped())
+            ->map(fn (array $permissions) => array_values(array_filter(
+                $permissions,
+                fn (Permission $permission) => $permission->isAccountantEligible(),
+            )))
+            ->filter(fn (array $permissions) => $permissions !== [])
+            ->all();
+
         return [
             'groupedPermissions' => Permission::grouped(),
+            'accountantGroupedPermissions' => $accountantGroupedPermissions,
         ];
     }
 }; ?>
@@ -84,9 +99,13 @@ new class extends Component
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <form wire:submit="saveAccountant" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
             <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Accountant</h3>
+            <p class="text-xs text-slate-400 dark:text-slate-500">
+                Create and view only — Accountant can never be granted an edit/delete or management permission, so
+                those don't appear here at all.
+            </p>
 
             <div class="mt-4 space-y-4">
-                @foreach ($groupedPermissions as $group => $permissions)
+                @foreach ($accountantGroupedPermissions as $group => $permissions)
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ $group }}</p>
                         <div class="mt-1 space-y-1">
