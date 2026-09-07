@@ -103,6 +103,9 @@ new class extends Component
                             <p>{{ $employee->phone }}</p>
                         @endif
                     </div>
+                    @if ($employee->remarks)
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $employee->remarks }}</p>
+                    @endif
                 </div>
             </div>
 

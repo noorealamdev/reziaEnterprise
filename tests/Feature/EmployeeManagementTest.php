@@ -23,6 +23,19 @@ test('employees index lists a seeded staff member', function () {
         ->assertSee('Mr. Monir');
 });
 
+test('an employees remarks is shown on its row in the employees list', function () {
+    $user = User::factory()->create();
+    Employee::factory()->create([
+        'name' => 'Mr. Monir',
+        'remarks' => 'Covers night shift on weekends',
+    ]);
+
+    $this->actingAs($user)
+        ->get('/employees')
+        ->assertOk()
+        ->assertSee('Covers night shift on weekends');
+});
+
 test('employee list search filters by name', function () {
     $user = User::factory()->create();
     Employee::factory()->create(['name' => 'Mr. Monir']);
