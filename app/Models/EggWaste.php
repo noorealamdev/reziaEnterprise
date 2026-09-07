@@ -2,24 +2,19 @@
 
 namespace App\Models;
 
-use Database\Factories\EggSaleFactory;
+use Database\Factories\EggWasteFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class EggSale extends Model
+class EggWaste extends Model
 {
-    /** @use HasFactory<EggSaleFactory> */
+    /** @use HasFactory<EggWasteFactory> */
     use HasFactory;
 
     protected $fillable = [
-        'sale_date',
+        'waste_date',
         'quantity',
-        'sale_rate',
-        'sale_amount',
-        'buyer_name',
-        'payment_status',
-        'in_charge',
         'remarks',
         'created_by',
     ];
@@ -30,10 +25,8 @@ class EggSale extends Model
     protected function casts(): array
     {
         return [
-            'sale_date' => 'date',
+            'waste_date' => 'date',
             'quantity' => 'decimal:2',
-            'sale_rate' => 'decimal:2',
-            'sale_amount' => 'decimal:2',
         ];
     }
 

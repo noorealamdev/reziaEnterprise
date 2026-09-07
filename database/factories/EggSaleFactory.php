@@ -26,6 +26,8 @@ class EggSaleFactory extends Factory
             'sale_rate' => $saleRate,
             'sale_amount' => round($quantity * $saleRate, 2),
             'buyer_name' => fake()->company(),
+            'payment_status' => 'cash',
+            'in_charge' => null,
             'remarks' => null,
             'created_by' => null,
         ];

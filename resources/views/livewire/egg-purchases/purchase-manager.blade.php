@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\EggSale;
+use App\Models\EggWaste;
 use App\Models\JobEntry;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
@@ -23,6 +24,8 @@ new class extends Component
     private const SUPPLY_PER_PAGE = 15;
 
     private const SALES_PER_PAGE = 10;
+
+    private const WASTE_PER_PAGE = 10;
 
     #[Url(as: 'view', history: true)]
     public string $activeView = 'purchases';
@@ -63,6 +66,19 @@ new class extends Component
     #[Url(as: 'sale_range', history: true)]
     public string $saleRangeFilter = '';
 
+    #[Url(as: 'sale_in_charge', history: true)]
+    public string $saleInChargeFilter = '';
+
+    #[Url(as: 'waste_year', history: true)]
+    public string $wasteYearFilter = '';
+
+    #[Url(as: 'waste_month', history: true)]
+    public string $wasteMonthFilter = '';
+
+    /** Quick range: '' (use Year/Month), '7' (last 7 days), '15' or '30'. */
+    #[Url(as: 'waste_range', history: true)]
+    public string $wasteRangeFilter = '';
+
     public ?int $editingId = null;
 
     public ?int $tiffin_item_id = null;
@@ -100,9 +116,23 @@ new class extends Component
 
     public ?string $buyer_name = null;
 
+    public string $payment_status = 'cash';
+
+    public ?string $in_charge = null;
+
     public ?string $sale_remarks = null;
 
     public ?int $confirmingDeleteSaleId = null;
+
+    public ?int $editingWasteId = null;
+
+    public string $waste_date = '';
+
+    public ?string $waste_quantity = null;
+
+    public ?string $waste_remarks = null;
+
+    public ?int $confirmingDeleteWasteId = null;
 
     /**
      * Captured once in mount() — a paginator built or re-resolved mid-session
@@ -198,6 +228,30 @@ new class extends Component
         $this->resetPage('salesPage');
     }
 
+    public function updatingSaleInChargeFilter(): void
+    {
+        $this->resetPage('salesPage');
+    }
+
+    public function updatingWasteYearFilter(): void
+    {
+        $this->wasteMonthFilter = '';
+        $this->wasteRangeFilter = '';
+        $this->resetPage('wastePage');
+    }
+
+    public function updatingWasteMonthFilter(): void
+    {
+        $this->resetPage('wastePage');
+    }
+
+    public function updatingWasteRangeFilter(): void
+    {
+        $this->wasteYearFilter = '';
+        $this->wasteMonthFilter = '';
+        $this->resetPage('wastePage');
+    }
+
     /**
      * Every #[Url]-bound property this component has, appended onto both
      * paginators' page links — without this, clicking "Next" (a plain
@@ -222,6 +276,10 @@ new class extends Component
             'sale_year' => $this->saleYearFilter,
             'sale_month' => $this->saleMonthFilter,
             'sale_range' => $this->saleRangeFilter,
+            'sale_in_charge' => $this->saleInChargeFilter,
+            'waste_year' => $this->wasteYearFilter,
+            'waste_month' => $this->wasteMonthFilter,
+            'waste_range' => $this->wasteRangeFilter,
         ], fn ($value) => $value !== '');
     }
 
@@ -400,6 +458,8 @@ new class extends Component
         $this->sale_quantity = null;
         $this->sale_rate = null;
         $this->buyer_name = null;
+        $this->payment_status = 'cash';
+        $this->in_charge = null;
         $this->sale_remarks = null;
         $this->resetErrorBag();
         $this->dispatch('open-modal', 'egg-sale-form');
@@ -413,6 +473,12 @@ new class extends Component
         $this->sale_quantity = (string) $sale->quantity;
         $this->sale_rate = (string) $sale->sale_rate;
         $this->buyer_name = $sale->buyer_name;
+        // Editing only ever offers Cash/Due — "Paid" is reached exclusively
+        // through markSalePaid() below, never typed in directly, so a
+        // previously-paid sale still shows as Due here rather than
+        // silently defaulting back to Cash.
+        $this->payment_status = $sale->payment_status === 'paid' ? 'due' : $sale->payment_status;
+        $this->in_charge = $sale->in_charge;
         $this->sale_remarks = $sale->remarks;
         $this->resetErrorBag();
         $this->dispatch('open-modal', 'egg-sale-form');
@@ -427,6 +493,8 @@ new class extends Component
             'sale_quantity' => ['required', 'numeric', 'min:0.01'],
             'sale_rate' => ['required', 'numeric', 'min:0'],
             'buyer_name' => ['nullable', 'string', 'max:255'],
+            'payment_status' => ['required', Rule::in(['cash', 'due'])],
+            'in_charge' => ['nullable', 'string', 'max:255'],
             'sale_remarks' => ['nullable', 'string', 'max:2000'],
         ], [], [
             'sale_quantity' => 'quantity',
@@ -439,6 +507,8 @@ new class extends Component
             'sale_rate' => $validated['sale_rate'],
             'sale_amount' => round((float) $validated['sale_quantity'] * (float) $validated['sale_rate'], 2),
             'buyer_name' => $validated['buyer_name'] ? trim($validated['buyer_name']) : null,
+            'payment_status' => $validated['payment_status'],
+            'in_charge' => $validated['in_charge'] ? trim($validated['in_charge']) : null,
             'remarks' => $validated['sale_remarks'] ? trim($validated['sale_remarks']) : null,
         ];
 
@@ -451,6 +521,15 @@ new class extends Component
 
         $this->dispatch('close-modal', 'egg-sale-form');
         session()->flash('status', $this->editingSaleId ? 'Sale updated.' : 'Sale recorded.');
+    }
+
+    public function markSalePaid(int $saleId): void
+    {
+        Gate::authorize('egg_sales.modify');
+
+        EggSale::whereKey($saleId)->where('payment_status', 'due')->update(['payment_status' => 'paid']);
+
+        session()->flash('status', 'Sale marked as paid.');
     }
 
     public function confirmDeleteSale(int $saleId): void
@@ -470,6 +549,75 @@ new class extends Component
         $this->confirmingDeleteSaleId = null;
         $this->dispatch('close-modal', 'confirm-egg-sale-deletion');
         session()->flash('status', 'Sale deleted.');
+    }
+
+    public function startCreateWaste(): void
+    {
+        $this->editingWasteId = null;
+        $this->waste_date = now()->toDateString();
+        $this->waste_quantity = null;
+        $this->waste_remarks = null;
+        $this->resetErrorBag();
+        $this->dispatch('open-modal', 'egg-waste-form');
+    }
+
+    public function startEditWaste(int $wasteId): void
+    {
+        $waste = EggWaste::findOrFail($wasteId);
+        $this->editingWasteId = $waste->id;
+        $this->waste_date = $waste->waste_date->format('Y-m-d');
+        $this->waste_quantity = (string) $waste->quantity;
+        $this->waste_remarks = $waste->remarks;
+        $this->resetErrorBag();
+        $this->dispatch('open-modal', 'egg-waste-form');
+    }
+
+    public function saveWaste(): void
+    {
+        Gate::authorize($this->editingWasteId ? 'egg_purchases.modify' : 'egg_purchases.create');
+
+        $validated = $this->validate([
+            'waste_date' => ['required', 'date'],
+            'waste_quantity' => ['required', 'numeric', 'min:0.01'],
+            'waste_remarks' => ['nullable', 'string', 'max:2000'],
+        ], [], [
+            'waste_quantity' => 'quantity',
+        ]);
+
+        $attributes = [
+            'waste_date' => $validated['waste_date'],
+            'quantity' => $validated['waste_quantity'],
+            'remarks' => $validated['waste_remarks'] ? trim($validated['waste_remarks']) : null,
+        ];
+
+        if ($this->editingWasteId) {
+            EggWaste::whereKey($this->editingWasteId)->update($attributes);
+        } else {
+            $attributes['created_by'] = auth()->id();
+            EggWaste::create($attributes);
+        }
+
+        $this->dispatch('close-modal', 'egg-waste-form');
+        session()->flash('status', $this->editingWasteId ? 'Waste updated.' : 'Waste recorded.');
+    }
+
+    public function confirmDeleteWaste(int $wasteId): void
+    {
+        $this->confirmingDeleteWasteId = $wasteId;
+        $this->dispatch('open-modal', 'confirm-egg-waste-deletion');
+    }
+
+    public function deleteWaste(): void
+    {
+        Gate::authorize('egg_purchases.modify');
+
+        if ($this->confirmingDeleteWasteId) {
+            EggWaste::destroy($this->confirmingDeleteWasteId);
+        }
+
+        $this->confirmingDeleteWasteId = null;
+        $this->dispatch('close-modal', 'confirm-egg-waste-deletion');
+        session()->flash('status', 'Waste deleted.');
     }
 
     public function with(): array
@@ -508,6 +656,7 @@ new class extends Component
             ...$this->supplyReport(),
             ...$this->stockSummary(),
             ...$this->salesReport($monthOptions),
+            ...$this->wasteReport($monthOptions),
         ];
     }
 
@@ -516,9 +665,10 @@ new class extends Component
      * has actually used (job_entries.quantity already includes the fixed
      * spoilage buffer on top of headcount — the real number of eggs sent
      * out, not just the billed headcount), minus everything sold to an
-     * outside buyer.
+     * outside buyer, minus everything explicitly logged as wasted
+     * (broken/spoiled beyond that fixed per-day buffer).
      *
-     * @return array{eggTotalPurchased: float, eggTotalConsumed: float, eggTotalSold: float, eggInStock: float, eggTotalRevenue: float}
+     * @return array{eggTotalPurchased: float, eggTotalConsumed: float, eggTotalSold: float, eggTotalWasted: float, eggInStock: float, eggTotalRevenue: float}
      */
     private function stockSummary(): array
     {
@@ -533,12 +683,14 @@ new class extends Component
             ->sum('quantity');
 
         $totalSold = (float) EggSale::sum('quantity');
+        $totalWasted = (float) EggWaste::sum('quantity');
 
         return [
             'eggTotalPurchased' => $totalPurchased,
             'eggTotalConsumed' => $totalConsumed,
             'eggTotalSold' => $totalSold,
-            'eggInStock' => $totalPurchased - $totalConsumed - $totalSold,
+            'eggTotalWasted' => $totalWasted,
+            'eggInStock' => $totalPurchased - $totalConsumed - $totalSold - $totalWasted,
             'eggTotalRevenue' => (float) EggSale::sum('sale_amount'),
         ];
     }
@@ -558,6 +710,7 @@ new class extends Component
         $sales = EggSale::when($this->saleRangeFilter, fn ($query) => $query->whereDate('sale_date', '>=', now()->subDays((int) $this->saleRangeFilter - 1)->startOfDay()->toDateString()))
             ->when($this->saleYearFilter, fn ($query) => $query->whereYear('sale_date', $this->saleYearFilter))
             ->when($this->saleMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->saleMonthFilter))
+            ->when($this->saleInChargeFilter, fn ($query) => $query->where('in_charge', 'like', '%'.$this->saleInChargeFilter.'%'))
             ->orderByDesc('sale_date')
             ->orderByDesc('id')
             ->simplePaginate(self::SALES_PER_PAGE, ['*'], 'salesPage')
@@ -571,6 +724,34 @@ new class extends Component
             'saleAmountPreview' => (is_numeric($this->sale_quantity) && is_numeric($this->sale_rate))
                 ? round((float) $this->sale_quantity * (float) $this->sale_rate, 2)
                 : null,
+        ];
+    }
+
+    /**
+     * @param  Collection<int, string>  $monthOptions
+     * @return array{wastes: LengthAwarePaginator, wasteAvailableYears: Collection<int, int>, wasteMonthOptions: Collection<int, string>}
+     */
+    private function wasteReport(Collection $monthOptions): array
+    {
+        $wasteAvailableYears = EggWaste::pluck('waste_date')
+            ->map(fn ($date) => $date->year)
+            ->unique()
+            ->sortDesc()
+            ->values();
+
+        $wastes = EggWaste::when($this->wasteRangeFilter, fn ($query) => $query->whereDate('waste_date', '>=', now()->subDays((int) $this->wasteRangeFilter - 1)->startOfDay()->toDateString()))
+            ->when($this->wasteYearFilter, fn ($query) => $query->whereYear('waste_date', $this->wasteYearFilter))
+            ->when($this->wasteMonthFilter, fn ($query) => $query->whereMonth('waste_date', $this->wasteMonthFilter))
+            ->orderByDesc('waste_date')
+            ->orderByDesc('id')
+            ->simplePaginate(self::WASTE_PER_PAGE, ['*'], 'wastePage')
+            ->setPath($this->paginationPath)
+            ->appends($this->urlQueryState());
+
+        return [
+            'wastes' => $wastes,
+            'wasteAvailableYears' => $wasteAvailableYears,
+            'wasteMonthOptions' => $monthOptions,
         ];
     }
 
@@ -658,10 +839,17 @@ new class extends Component
                 </x-primary-button>
             @endif
         @endcan
+        @can('egg_purchases.create')
+            @if ($activeView === 'waste')
+                <x-primary-button type="button" wire:click="startCreateWaste">
+                    + Record Waste
+                </x-primary-button>
+            @endif
+        @endcan
     </div>
 
     @can('egg_sales.view')
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
                 <p class="text-xs text-slate-500 dark:text-slate-400">Purchased</p>
                 <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalPurchased, 2), '0'), '.') }}</p>
@@ -673,6 +861,10 @@ new class extends Component
             <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
                 <p class="text-xs text-slate-500 dark:text-slate-400">Sold Externally</p>
                 <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalSold, 2), '0'), '.') }}</p>
+            </div>
+            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+                <p class="text-xs text-slate-500 dark:text-slate-400">Wasted</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalWasted, 2), '0'), '.') }}</p>
             </div>
             <div class="rounded-xl border border-brand-200 bg-brand-50 p-4 shadow-sm dark:border-brand-800 dark:bg-brand-900/20">
                 <p class="text-xs text-brand-700 dark:text-brand-300">In Stock Now</p>
@@ -708,6 +900,14 @@ new class extends Component
                 Sales
             </button>
         @endcan
+        <button
+            type="button"
+            wire:click="switchView('waste')"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'waste' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+        >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0 1 16.138 21H7.862a2 2 0 0 1-1.995-1.858L5 7m5 4v6m4-6v6M9.5 4h5l.5 3h-6l.5-3z" /></svg>
+            Waste
+        </button>
     </div>
 
     @if ($activeView === 'purchases')
@@ -725,7 +925,7 @@ new class extends Component
             </x-select-input>
 
             <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
-                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days'] as $value => $label)
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
                     <button
                         type="button"
                         wire:click="$set('rangeFilter', '{{ $value }}')"
@@ -766,6 +966,9 @@ new class extends Component
                                 · {{ $purchase->supplier_name }}
                             @endif
                         </p>
+                        @if ($purchase->remarks)
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $purchase->remarks }}</p>
+                        @endif
                         @if ($purchase->memo_url)
                             <a href="{{ $purchase->memo_url }}" target="_blank" rel="noopener" class="mt-1 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h1M6 4h12a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /></svg>
@@ -812,7 +1015,7 @@ new class extends Component
             </x-select-input>
 
             <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
-                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days'] as $value => $label)
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
                     <button
                         type="button"
                         wire:click="$set('supplyRangeFilter', '{{ $value }}')"
@@ -880,7 +1083,7 @@ new class extends Component
 
         <div class="flex flex-wrap items-center gap-3">
             <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
-                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days'] as $value => $label)
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
                     <button
                         type="button"
                         wire:click="$set('saleRangeFilter', '{{ $value }}')"
@@ -904,6 +1107,8 @@ new class extends Component
                     <option value="{{ $value }}">{{ $label }}</option>
                 @endforeach
             </x-select-input>
+
+            <x-text-input wire:model.live.debounce.400ms="saleInChargeFilter" placeholder="Search by In-Charge" class="w-full sm:w-48" />
         </div>
 
         @forelse ($sales as $sale)
@@ -913,11 +1118,24 @@ new class extends Component
                         <div class="flex flex-wrap items-center gap-2">
                             <h3 class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ $sale->buyer_name ?: 'Egg Sale' }}</h3>
                             <span class="text-xs text-slate-400 dark:text-slate-500">{{ $sale->sale_date->format('d M Y') }}</span>
+                            @if ($sale->payment_status === 'due')
+                                <x-badge color="amber">Due</x-badge>
+                            @elseif ($sale->payment_status === 'paid')
+                                <x-badge color="green">Paid</x-badge>
+                            @else
+                                <x-badge color="slate">Cash</x-badge>
+                            @endif
                         </div>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                             Qty {{ rtrim(rtrim(number_format((float) $sale->quantity, 2), '0'), '.') }}
                             · Rate {{ number_format((float) $sale->sale_rate, 2) }}
+                            @if ($sale->in_charge)
+                                · In-Charge: {{ $sale->in_charge }}
+                            @endif
                         </p>
+                        @if ($sale->remarks)
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $sale->remarks }}</p>
+                        @endif
                     </div>
                     <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $sale->sale_amount, 2) }}</span>
                 </div>
@@ -927,6 +1145,11 @@ new class extends Component
                         <x-secondary-button type="button" wire:click="startEditSale({{ $sale->id }})">
                             Edit
                         </x-secondary-button>
+                        @if ($sale->payment_status === 'due')
+                            <x-secondary-button type="button" wire:click="markSalePaid({{ $sale->id }})">
+                                Mark Paid
+                            </x-secondary-button>
+                        @endif
                         <x-danger-button type="button" wire:click="confirmDeleteSale({{ $sale->id }})">
                             Delete
                         </x-danger-button>
@@ -941,6 +1164,74 @@ new class extends Component
         @endforelse
 
         {{ $sales->links('pagination::simple-tailwind') }}
+    @elseif ($activeView === 'waste')
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+            Eggs broken or spoiled and thrown out — beyond the fixed daily buffer already built into Tiffin's
+            own usage figure. Each entry reduces the "In Stock Now" figure above, same as a sale does.
+        </p>
+
+        <div class="flex flex-wrap items-center gap-3">
+            <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
+                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
+                    <button
+                        type="button"
+                        wire:click="$set('wasteRangeFilter', '{{ $value }}')"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $wasteRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                    >
+                        {{ $label }}
+                    </button>
+                @endforeach
+            </div>
+
+            <x-select-input wire:model.live="wasteYearFilter" class="w-full sm:w-32">
+                <option value="">Every year</option>
+                @foreach ($wasteAvailableYears as $year)
+                    <option value="{{ $year }}">{{ $year }}</option>
+                @endforeach
+            </x-select-input>
+
+            <x-select-input wire:model.live="wasteMonthFilter" class="w-full sm:w-40" :disabled="! $wasteYearFilter">
+                <option value="">{{ $wasteYearFilter ? 'Every month' : 'Pick a year first' }}</option>
+                @foreach ($wasteMonthOptions as $value => $label)
+                    <option value="{{ $value }}">{{ $label }}</option>
+                @endforeach
+            </x-select-input>
+        </div>
+
+        @forelse ($wastes as $waste)
+            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <h3 class="truncate text-sm font-semibold text-slate-900 dark:text-white">Egg Waste</h3>
+                            <span class="text-xs text-slate-400 dark:text-slate-500">{{ $waste->waste_date->format('d M Y') }}</span>
+                        </div>
+                        @if ($waste->remarks)
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $waste->remarks }}</p>
+                        @endif
+                    </div>
+                    <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format((float) $waste->quantity, 2), '0'), '.') }}</span>
+                </div>
+
+                @can('egg_purchases.modify')
+                    <div class="mt-4 flex items-center gap-3">
+                        <x-secondary-button type="button" wire:click="startEditWaste({{ $waste->id }})">
+                            Edit
+                        </x-secondary-button>
+                        <x-danger-button type="button" wire:click="confirmDeleteWaste({{ $waste->id }})">
+                            Delete
+                        </x-danger-button>
+                    </div>
+                @endcan
+            </div>
+        @empty
+            <x-empty-state
+                :title="$wasteAvailableYears->isNotEmpty() ? 'No waste matches these filters' : 'No Egg waste recorded yet'"
+                :message="$wasteAvailableYears->isNotEmpty() ? 'Try a different year or month — or clear the filters above.' : 'Record it whenever eggs are broken or spoiled and thrown out.'"
+            />
+        @endforelse
+
+        {{ $wastes->links('pagination::simple-tailwind') }}
     @endif
 
     <x-modal name="egg-purchase-form" focusable>
@@ -1092,6 +1383,21 @@ new class extends Component
             </div>
 
             <div>
+                <x-input-label for="payment_status" value="Payment Type" />
+                <x-select-input wire:model="payment_status" id="payment_status" class="mt-1 block w-full">
+                    <option value="cash">Cash</option>
+                    <option value="due">Due</option>
+                </x-select-input>
+                <x-input-error :messages="$errors->get('payment_status')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="in_charge" value="In-Charge" />
+                <x-text-input wire:model="in_charge" id="in_charge" placeholder="e.g. Mr. Karim" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('in_charge')" class="mt-2" />
+            </div>
+
+            <div>
                 <x-input-label for="sale_remarks" value="Remarks" />
                 <x-textarea-input wire:model="sale_remarks" id="sale_remarks" placeholder="Optional" class="mt-1 block w-full" />
                 <x-input-error :messages="$errors->get('sale_remarks')" class="mt-2" />
@@ -1118,6 +1424,55 @@ new class extends Component
             <div class="mt-6 flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
                 <x-danger-button type="button" wire:click="deleteSale">Delete</x-danger-button>
+            </div>
+        </div>
+    </x-modal>
+
+    <x-modal name="egg-waste-form" focusable>
+        <form wire:submit="saveWaste" class="space-y-6 p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
+                {{ $editingWasteId ? 'Edit Waste' : 'Record Waste' }}
+            </h2>
+
+            <div>
+                <x-input-label for="waste_date" value="Date" />
+                <x-text-input wire:model="waste_date" id="waste_date" type="date" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('waste_date')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="waste_quantity" value="Quantity" />
+                <x-text-input wire:model="waste_quantity" id="waste_quantity" type="number" step="0.01" min="0" placeholder="e.g. 20" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('waste_quantity')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="waste_remarks" value="Remarks" />
+                <x-textarea-input wire:model="waste_remarks" id="waste_remarks" placeholder="e.g. Crate dropped in storage" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('waste_remarks')" class="mt-2" />
+            </div>
+
+            <div class="flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">
+                    Cancel
+                </x-secondary-button>
+                <x-primary-button>
+                    {{ $editingWasteId ? 'Save Changes' : 'Record Waste' }}
+                </x-primary-button>
+            </div>
+        </form>
+    </x-modal>
+
+    <x-modal name="confirm-egg-waste-deletion" focusable>
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Delete this waste record?</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                This cannot be undone. Deleting it increases the "In Stock Now" figure back up, since those
+                eggs are no longer counted as wasted.
+            </p>
+            <div class="mt-6 flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
+                <x-danger-button type="button" wire:click="deleteWaste">Delete</x-danger-button>
             </div>
         </div>
     </x-modal>

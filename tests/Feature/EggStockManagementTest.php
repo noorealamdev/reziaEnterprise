@@ -2,6 +2,7 @@
 
 use App\Models\Company;
 use App\Models\EggSale;
+use App\Models\EggWaste;
 use App\Models\JobEntry;
 use App\Models\RolePermission;
 use App\Models\TiffinDepartment;
@@ -56,6 +57,12 @@ test('the stock summary nets purchases minus tiffin consumption minus external s
         'buyer_name' => 'Local Market',
     ]);
 
+    EggWaste::create([
+        'waste_date' => '2026-09-04',
+        'quantity' => 20,
+        'remarks' => 'Crate dropped in storage',
+    ]);
+
     $this->actingAs($user);
 
     $component = Volt::test('egg-purchases.purchase-manager');
@@ -63,8 +70,9 @@ test('the stock summary nets purchases minus tiffin consumption minus external s
     expect($component->viewData('eggTotalPurchased'))->toBe(1000.0);
     expect($component->viewData('eggTotalConsumed'))->toBe(300.0);
     expect($component->viewData('eggTotalSold'))->toBe(150.0);
-    // 1000 - 300 - 150 = 550.
-    expect($component->viewData('eggInStock'))->toBe(550.0);
+    expect($component->viewData('eggTotalWasted'))->toBe(20.0);
+    // 1000 - 300 - 150 - 20 = 530.
+    expect($component->viewData('eggInStock'))->toBe(530.0);
     expect($component->viewData('eggTotalRevenue'))->toBe(2100.0);
 });
 
@@ -108,6 +116,93 @@ test('saving a new Tiffin batch entry immediately reduces In Stock Now on the Eg
     // consumed, so stock drops from 1,000 to 795 — deducted purely from
     // the purchased stock, with no separate action needed.
     expect(Volt::test('egg-purchases.purchase-manager')->viewData('eggInStock'))->toBe(795.0);
+});
+
+test('a sale remarks is shown on its row in the sales list', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'sales')
+        ->call('startCreateSale')
+        ->set('sale_date', '2026-09-05')
+        ->set('sale_quantity', '200')
+        ->set('sale_rate', '14')
+        ->set('sale_remarks', 'Buyer picked up in person')
+        ->call('saveSale')
+        ->assertHasNoErrors()
+        ->assertSee('Buyer picked up in person');
+});
+
+test('a sale defaults to cash and can be recorded as due instead', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'sales')
+        ->call('startCreateSale')
+        ->assertSet('payment_status', 'cash')
+        ->set('sale_date', '2026-09-05')
+        ->set('sale_quantity', '200')
+        ->set('sale_rate', '14')
+        ->set('payment_status', 'due')
+        ->call('saveSale')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('egg_sales', [
+        'quantity' => 200,
+        'payment_status' => 'due',
+    ]);
+});
+
+test('marking a due sale as paid updates its status', function () {
+    $user = User::factory()->create();
+    $sale = EggSale::create([
+        'sale_date' => '2026-09-02',
+        'quantity' => 200,
+        'sale_rate' => 14,
+        'sale_amount' => 2800,
+        'payment_status' => 'due',
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('markSalePaid', $sale->id)
+        ->assertHasNoErrors();
+
+    expect($sale->fresh()->payment_status)->toBe('paid');
+});
+
+test('a sale in-charge is shown on its row and can be searched', function () {
+    $user = User::factory()->create();
+    EggSale::create([
+        'sale_date' => '2026-09-05',
+        'quantity' => 200,
+        'sale_rate' => 14,
+        'sale_amount' => 2800,
+        'in_charge' => 'Mr. Karim',
+    ]);
+    EggSale::create([
+        'sale_date' => '2026-09-06',
+        'quantity' => 100,
+        'sale_rate' => 14,
+        'sale_amount' => 1400,
+        'in_charge' => 'Mr. Rahim',
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'sales')
+        ->assertSee('Mr. Karim')
+        ->assertSee('Mr. Rahim')
+        ->set('saleInChargeFilter', 'Karim');
+
+    expect($component->viewData('sales'))->toHaveCount(1);
+    $component->assertSee('Mr. Karim')->assertDontSee('Mr. Rahim');
 });
 
 test('recording a sale persists with a computed sale amount and reduces stock on hand', function () {
@@ -240,6 +335,7 @@ test('the sale quick range filter only counts sales within that window', functio
 
     EggSale::create(['sale_date' => now()->subDays(3)->toDateString(), 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400]);
     EggSale::create(['sale_date' => now()->subDays(20)->toDateString(), 'quantity' => 200, 'sale_rate' => 14, 'sale_amount' => 2800]);
+    EggSale::create(['sale_date' => now()->subDays(25)->toDateString(), 'quantity' => 150, 'sale_rate' => 14, 'sale_amount' => 2100]);
 
     $this->actingAs($user);
 
@@ -252,6 +348,11 @@ test('the sale quick range filter only counts sales within that window', functio
         ->call('switchView', 'sales')
         ->set('saleRangeFilter', '15');
     expect($byFifteenDays->viewData('sales'))->toHaveCount(1);
+
+    $byThirtyDays = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'sales')
+        ->set('saleRangeFilter', '30');
+    expect($byThirtyDays->viewData('sales'))->toHaveCount(3);
 });
 
 test('choosing a sale range clears the year and month, and vice versa', function () {
@@ -309,5 +410,148 @@ test('an accountant can record a sale but gets a 403 trying to edit or delete on
     Volt::test('egg-purchases.purchase-manager')
         ->call('confirmDeleteSale', $sale->id)
         ->call('deleteSale')
+        ->assertForbidden();
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('markSalePaid', $sale->id)
+        ->assertForbidden();
+});
+
+test('recording waste persists it and reduces stock on hand', function () {
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+    TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-01',
+        'quantity' => 1000,
+        'cost_rate' => 11.5,
+        'cost_amount' => 11500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'waste')
+        ->call('startCreateWaste')
+        ->set('waste_date', '2026-09-05')
+        ->set('waste_quantity', '25')
+        ->set('waste_remarks', 'Broken during delivery')
+        ->call('saveWaste')
+        ->assertHasNoErrors()
+        ->assertSee('Broken during delivery');
+
+    $this->assertDatabaseHas('egg_wastes', [
+        'quantity' => 25,
+        'remarks' => 'Broken during delivery',
+    ]);
+
+    $component = Volt::test('egg-purchases.purchase-manager');
+    // 1000 purchased - 0 consumed - 0 sold - 25 wasted = 975.
+    expect($component->viewData('eggInStock'))->toBe(975.0);
+});
+
+test('editing a waste record updates it', function () {
+    $user = User::factory()->create();
+    $waste = EggWaste::create(['waste_date' => '2026-09-02', 'quantity' => 20]);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startEditWaste', $waste->id)
+        ->set('waste_quantity', '30')
+        ->call('saveWaste')
+        ->assertHasNoErrors();
+
+    expect((float) $waste->fresh()->quantity)->toBe(30.0);
+});
+
+test('deleting a waste record removes it', function () {
+    $user = User::factory()->create();
+    $waste = EggWaste::create(['waste_date' => '2026-09-02', 'quantity' => 20]);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('confirmDeleteWaste', $waste->id)
+        ->call('deleteWaste');
+
+    $this->assertDatabaseMissing('egg_wastes', ['id' => $waste->id]);
+});
+
+test('quantity is required to record waste', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startCreateWaste')
+        ->set('waste_date', '2026-09-05')
+        ->set('waste_quantity', '')
+        ->call('saveWaste')
+        ->assertHasErrors(['waste_quantity']);
+});
+
+test('waste year and month filters narrow the listed waste records', function () {
+    $user = User::factory()->create();
+
+    EggWaste::create(['waste_date' => '2025-08-10', 'quantity' => 10]);
+    EggWaste::create(['waste_date' => '2026-03-05', 'quantity' => 15]);
+
+    $this->actingAs($user);
+
+    $byYear = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'waste')
+        ->set('wasteYearFilter', '2025');
+    expect($byYear->viewData('wastes'))->toHaveCount(1);
+
+    $byMonth = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'waste')
+        ->set('wasteYearFilter', '2026')
+        ->set('wasteMonthFilter', '3');
+    expect($byMonth->viewData('wastes'))->toHaveCount(1);
+});
+
+test('the waste quick range filter only counts records within that window', function () {
+    $user = User::factory()->create();
+
+    EggWaste::create(['waste_date' => now()->subDays(3)->toDateString(), 'quantity' => 10]);
+    EggWaste::create(['waste_date' => now()->subDays(20)->toDateString(), 'quantity' => 15]);
+
+    $this->actingAs($user);
+
+    $byWeek = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'waste')
+        ->set('wasteRangeFilter', '7');
+    expect($byWeek->viewData('wastes'))->toHaveCount(1);
+
+    $byThirtyDays = Volt::test('egg-purchases.purchase-manager')
+        ->call('switchView', 'waste')
+        ->set('wasteRangeFilter', '30');
+    expect($byThirtyDays->viewData('wastes'))->toHaveCount(2);
+});
+
+test('an accountant can record waste but gets a 403 trying to edit or delete it', function () {
+    $accountant = User::factory()->accountant()->create();
+    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggPurchasesCreate->value]);
+    $waste = EggWaste::create(['waste_date' => '2026-09-01', 'quantity' => 20]);
+
+    $this->actingAs($accountant);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startCreateWaste')
+        ->set('waste_date', '2026-09-05')
+        ->set('waste_quantity', '10')
+        ->call('saveWaste')
+        ->assertHasNoErrors();
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startEditWaste', $waste->id)
+        ->set('waste_quantity', '999')
+        ->call('saveWaste')
+        ->assertForbidden();
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('confirmDeleteWaste', $waste->id)
+        ->call('deleteWaste')
         ->assertForbidden();
 });

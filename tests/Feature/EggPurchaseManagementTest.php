@@ -17,6 +17,15 @@ test('guests are redirected to login', function () {
     $this->get('/egg-purchases')->assertRedirect('/login');
 });
 
+test('the toast notifications component is present on the egg purchases page', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->get('/egg-purchases')
+        ->assertOk()
+        ->assertSeeVolt('layout.toast-notifications');
+});
+
 test('year and month filters narrow the listed purchases', function () {
     $user = User::factory()->create();
     $egg = TiffinItem::create(['name' => 'Egg']);
@@ -74,6 +83,13 @@ test('the purchases quick range filter only counts purchases within that window'
         'cost_rate' => 12,
         'cost_amount' => 6000,
     ]);
+    TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => now()->subDays(25)->toDateString(),
+        'quantity' => 600,
+        'cost_rate' => 13,
+        'cost_amount' => 7800,
+    ]);
 
     $this->actingAs($user);
 
@@ -82,6 +98,9 @@ test('the purchases quick range filter only counts purchases within that window'
 
     $byFifteenDays = Volt::test('egg-purchases.purchase-manager')->set('rangeFilter', '15');
     expect($byFifteenDays->viewData('purchases'))->toHaveCount(1);
+
+    $byThirtyDays = Volt::test('egg-purchases.purchase-manager')->set('rangeFilter', '30');
+    expect($byThirtyDays->viewData('purchases'))->toHaveCount(3);
 });
 
 test('choosing a purchases range clears the year and month, and vice versa', function () {
@@ -142,6 +161,24 @@ test('findFor carries forward the most recent purchase on or before the date, no
     // (future-relative-to-it) one.
     $foundOlder = TiffinItemPurchase::findFor('Egg', '2026-08-28');
     expect($foundOlder->id)->toBe($older->id);
+});
+
+test('a purchase remarks is shown on its row in the purchases list', function () {
+    $user = User::factory()->create();
+    $egg = TiffinItem::create(['name' => 'Egg']);
+
+    $this->actingAs($user);
+
+    Volt::test('egg-purchases.purchase-manager')
+        ->call('startCreate')
+        ->set('tiffin_item_id', $egg->id)
+        ->set('purchase_date', '2026-09-02')
+        ->set('quantity', '500')
+        ->set('cost_rate', '12.5')
+        ->set('remarks', 'Paid half in advance, rest on delivery')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSee('Paid half in advance, rest on delivery');
 });
 
 test('recording a purchase persists with a computed cost amount', function () {
@@ -407,6 +444,14 @@ test('the supply quick range filter only counts entries within that window', fun
         'supply_type' => 'Banana',
         'quantity' => 500,
     ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => now()->subDays(25)->toDateString(),
+        'supply_type' => 'Banana',
+        'quantity' => 700,
+    ]);
 
     $this->actingAs($user);
 
@@ -416,6 +461,13 @@ test('the supply quick range filter only counts entries within that window', fun
 
     expect($component->viewData('supplyMonthlyTotal'))->toBe(100.0);
     expect($component->viewData('supplyDays'))->toHaveCount(1);
+
+    $byThirtyDays = Volt::test('egg-purchases.purchase-manager')
+        ->set('supplyItemFilter', 'Banana')
+        ->set('supplyRangeFilter', '30');
+
+    expect($byThirtyDays->viewData('supplyMonthlyTotal'))->toBe(1300.0);
+    expect($byThirtyDays->viewData('supplyDays'))->toHaveCount(3);
 });
 
 test('choosing a supply range clears the year and month, and vice versa', function () {
