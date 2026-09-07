@@ -2,6 +2,7 @@
 
 use App\Models\Company;
 use App\Models\CompanyPurchase;
+use App\Models\CompanyPurchasePayment;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
@@ -49,6 +50,20 @@ new class extends Component
     public bool $removeMemo = false;
 
     public ?int $confirmingDeleteId = null;
+
+    public string $deleteBlockedMessage = '';
+
+    public ?int $payingPurchaseId = null;
+
+    public ?string $payAmount = null;
+
+    public string $payDate = '';
+
+    public ?string $payRemarks = null;
+
+    public $payReceiptFile = null;
+
+    public ?int $confirmingDeletePaymentId = null;
 
     /**
      * Captured once in mount() — a manually-built LengthAwarePaginator needs
@@ -200,6 +215,15 @@ new class extends Component
 
     public function confirmDelete(int $purchaseId): void
     {
+        $purchase = CompanyPurchase::findOrFail($purchaseId);
+
+        if ($purchase->adjustments()->exists() || $purchase->payments()->exists()) {
+            $this->deleteBlockedMessage = 'This purchase has Bill Adjustments or payments recorded against it and can\'t be deleted. Remove those first if it genuinely needs to be removed.';
+            $this->dispatch('open-modal', 'company-purchase-delete-blocked');
+
+            return;
+        }
+
         $this->confirmingDeleteId = $purchaseId;
         $this->dispatch('open-modal', 'confirm-company-purchase-deletion');
     }
@@ -210,6 +234,13 @@ new class extends Component
 
         if ($this->confirmingDeleteId) {
             $purchase = CompanyPurchase::find($this->confirmingDeleteId);
+
+            if ($purchase && ($purchase->adjustments()->exists() || $purchase->payments()->exists())) {
+                $this->confirmingDeleteId = null;
+                $this->dispatch('close-modal', 'confirm-company-purchase-deletion');
+
+                return;
+            }
 
             if ($purchase?->memo_path) {
                 Storage::disk('public')->delete($purchase->memo_path);
@@ -223,9 +254,82 @@ new class extends Component
         session()->flash('status', 'Purchase deleted.');
     }
 
+    public function startRecordPurchasePayment(int $purchaseId): void
+    {
+        $purchase = CompanyPurchase::findOrFail($purchaseId);
+        $this->payingPurchaseId = $purchase->id;
+        $remaining = max(0, $purchase->remainingBalance);
+        $this->payAmount = $remaining > 0 ? rtrim(rtrim(number_format($remaining, 2, '.', ''), '0'), '.') : '';
+        $this->payDate = now()->toDateString();
+        $this->payRemarks = null;
+        $this->payReceiptFile = null;
+        $this->resetErrorBag();
+        $this->dispatch('open-modal', 'company-purchase-payment-form');
+    }
+
+    public function recordPurchasePayment(): void
+    {
+        Gate::authorize('company_purchases.modify');
+
+        $purchase = CompanyPurchase::findOrFail($this->payingPurchaseId);
+
+        $validated = $this->validate([
+            'payAmount' => [
+                'required', 'numeric', 'min:0.01',
+                function (string $attribute, $value, $fail) use ($purchase): void {
+                    if ((float) $value > $purchase->remainingBalance + 0.01) {
+                        $fail('This purchase only has '.number_format($purchase->remainingBalance, 2).' remaining to pay.');
+                    }
+                },
+            ],
+            'payDate' => ['required', 'date'],
+            'payReceiptFile' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
+            'payRemarks' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        CompanyPurchasePayment::create([
+            'company_purchase_id' => $purchase->id,
+            'amount' => (float) $validated['payAmount'],
+            'paid_on' => $validated['payDate'],
+            'receipt_path' => $this->payReceiptFile ? $this->payReceiptFile->store('company-purchase-payment-receipts', 'public') : null,
+            'remarks' => $validated['payRemarks'] ? trim($validated['payRemarks']) : null,
+            'created_by' => auth()->id(),
+        ]);
+
+        $this->payingPurchaseId = null;
+        $this->payReceiptFile = null;
+        $this->dispatch('close-modal', 'company-purchase-payment-form');
+        session()->flash('status', 'Payment recorded.');
+    }
+
+    public function confirmDeletePurchasePayment(int $paymentId): void
+    {
+        $this->confirmingDeletePaymentId = $paymentId;
+        $this->dispatch('open-modal', 'confirm-company-purchase-payment-deletion');
+    }
+
+    public function deletePurchasePayment(): void
+    {
+        Gate::authorize('company_purchases.modify');
+
+        if ($this->confirmingDeletePaymentId) {
+            $payment = CompanyPurchasePayment::find($this->confirmingDeletePaymentId);
+
+            if ($payment?->receipt_path) {
+                Storage::disk('public')->delete($payment->receipt_path);
+            }
+
+            $payment?->delete();
+        }
+
+        $this->confirmingDeletePaymentId = null;
+        $this->dispatch('close-modal', 'confirm-company-purchase-payment-deletion');
+        session()->flash('status', 'Payment removed.');
+    }
+
     public function with(): array
     {
-        $purchasesQuery = CompanyPurchase::with('company')
+        $purchasesQuery = CompanyPurchase::with(['company', 'payments'])
             ->when($this->companyFilter, fn ($query) => $query->where('company_id', $this->companyFilter))
             ->when($this->yearFilter, fn ($query) => $query->whereYear('purchase_date', $this->yearFilter))
             ->when($this->monthFilter, fn ($query) => $query->whereMonth('purchase_date', $this->monthFilter));
@@ -326,6 +430,35 @@ new class extends Component
                             Remaining: <span class="font-medium text-slate-700 dark:text-slate-300">{{ number_format($purchase->remainingBalance, 2) }}</span> of {{ number_format((float) $purchase->amount, 2) }}
                         </p>
                     @endif
+                    @if ($purchase->payments->isNotEmpty())
+                        <div class="mt-2 space-y-1">
+                            @foreach ($purchase->payments as $payment)
+                                <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-2 py-1 text-xs dark:bg-slate-900/50">
+                                    <span class="text-slate-600 dark:text-slate-400">
+                                        Cash paid {{ number_format((float) $payment->amount, 2) }} — {{ $payment->paid_on->format('d M Y') }}
+                                        @if ($payment->remarks)
+                                            · {{ $payment->remarks }}
+                                        @endif
+                                    </span>
+                                    <span class="flex shrink-0 items-center gap-3">
+                                        @if ($payment->receiptUrl)
+                                            <a href="{{ $payment->receiptUrl }}" target="_blank" rel="noopener" class="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                                                {{ $payment->receiptIsPdf ? 'Receipt (PDF)' : 'View Receipt' }}
+                                            </a>
+                                        @endif
+                                        @can('company_purchases.modify')
+                                            <button type="button" wire:click="confirmDeletePurchasePayment({{ $payment->id }})" class="font-medium text-red-400 hover:text-red-600 dark:text-red-400/80 dark:hover:text-red-300">
+                                                Remove
+                                            </button>
+                                        @endcan
+                                    </span>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                    @if ($purchase->remarks)
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $purchase->remarks }}</p>
+                    @endif
                     @if ($purchase->memo_url)
                         <a href="{{ $purchase->memo_url }}" target="_blank" rel="noopener" class="mt-1 inline-flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M9 8h1M6 4h12a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /></svg>
@@ -341,6 +474,11 @@ new class extends Component
                     <x-secondary-button type="button" wire:click="startEdit({{ $purchase->id }})">
                         Edit
                     </x-secondary-button>
+                    @if ($purchase->remainingBalance > 0)
+                        <x-secondary-button type="button" wire:click="startRecordPurchasePayment({{ $purchase->id }})">
+                            Pay Cash
+                        </x-secondary-button>
+                    @endif
                     <x-danger-button type="button" wire:click="confirmDelete({{ $purchase->id }})">
                         Delete
                     </x-danger-button>
@@ -471,6 +609,81 @@ new class extends Component
             <div class="mt-6 flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
                 <x-danger-button type="button" wire:click="delete">Delete</x-danger-button>
+            </div>
+        </div>
+    </x-modal>
+
+    <x-modal name="company-purchase-delete-blocked" focusable>
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Can't delete this purchase</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ $deleteBlockedMessage }}</p>
+            <div class="mt-6 flex justify-end">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Close</x-secondary-button>
+            </div>
+        </div>
+    </x-modal>
+
+    <x-modal name="company-purchase-payment-form" focusable>
+        <form wire:submit="recordPurchasePayment" class="space-y-6 p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Pay Cash Against This Purchase</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                For whatever's left of this bill after any Bill Adjustments — cash Rezia Enterprise pays the
+                company directly.
+            </p>
+
+            <div>
+                <x-input-label for="payAmount" value="Amount" />
+                <x-text-input wire:model="payAmount" id="payAmount" type="number" step="0.01" min="0.01" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('payAmount')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="payDate" value="Date" />
+                <x-text-input wire:model="payDate" id="payDate" type="date" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('payDate')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="payReceiptFile" value="Money Receipt" />
+                <input type="file" wire:model="payReceiptFile" id="payReceiptFile" accept="image/*,.pdf" class="mt-1 block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 dark:text-slate-400 dark:file:bg-slate-700 dark:file:text-slate-200">
+                <div wire:loading wire:target="payReceiptFile" class="mt-1 text-xs text-slate-400 dark:text-slate-500">Uploading…</div>
+                @if ($payReceiptFile)
+                    @if ($payReceiptFile->isPreviewable())
+                        <img src="{{ $payReceiptFile->temporaryUrl() }}" alt="Money receipt preview" class="mt-2 max-h-24 rounded-lg border border-slate-200 dark:border-slate-700">
+                    @else
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Selected: {{ $payReceiptFile->getClientOriginalName() }}</p>
+                    @endif
+                @endif
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional — a photo or scan as proof this cash was handed over. JPG, PNG or PDF, up to 10MB.</p>
+                <x-input-error :messages="$errors->get('payReceiptFile')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="payRemarks" value="Remarks" />
+                <x-textarea-input wire:model="payRemarks" id="payRemarks" placeholder="Optional" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('payRemarks')" class="mt-2" />
+            </div>
+
+            <div class="flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">
+                    Cancel
+                </x-secondary-button>
+                <x-primary-button>
+                    Record Payment
+                </x-primary-button>
+            </div>
+        </form>
+    </x-modal>
+
+    <x-modal name="confirm-company-purchase-payment-deletion" focusable>
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Remove this payment?</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                The purchase's remaining balance will go back up by this amount. This cannot be undone.
+            </p>
+            <div class="mt-6 flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
+                <x-danger-button type="button" wire:click="deletePurchasePayment">Remove</x-danger-button>
             </div>
         </div>
     </x-modal>

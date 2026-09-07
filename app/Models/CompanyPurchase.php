@@ -62,14 +62,27 @@ class CompanyPurchase extends Model
     }
 
     /**
-     * Computed live from the full amount minus every adjustment ever
-     * recorded against it, rather than a stored counter — the same
-     * "avoid ledger drift" principle already used for Egg stock.
+     * Cash Rezia pays a company directly to settle what's left of this
+     * bill once every Bill Adjustment against it is accounted for — the
+     * reverse direction of an invoice payment, drawing down the same
+     * balance an adjustment would.
+     */
+    public function payments(): HasMany
+    {
+        return $this->hasMany(CompanyPurchasePayment::class);
+    }
+
+    /**
+     * Computed live from the full amount minus every adjustment and cash
+     * payment ever recorded against it, rather than a stored counter —
+     * the same "avoid ledger drift" principle already used for Egg stock.
      */
     protected function remainingBalance(): Attribute
     {
         return Attribute::make(
-            get: fn (): float => (float) $this->amount - (float) $this->adjustments()->sum('amount'),
+            get: fn (): float => (float) $this->amount
+                - (float) $this->adjustments()->sum('amount')
+                - (float) $this->payments()->sum('amount'),
         );
     }
 
