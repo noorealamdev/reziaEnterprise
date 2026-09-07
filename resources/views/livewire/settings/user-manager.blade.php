@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\PersonalContact;
 use App\Models\User;
 use App\UserRole;
 use Illuminate\Support\Facades\Gate;
@@ -25,6 +26,18 @@ new class extends Component
     public bool $is_active = true;
 
     public string $formError = '';
+
+    public ?int $confirmingDeleteId = null;
+
+    public string $deleteBlockedMessage = '';
+
+    /**
+     * personal_contacts.user_id cascades on delete (Personal Ledger is
+     * scoped per Super Admin) — flagged in the confirm dialog so deleting
+     * an account that owns ledger data is a deliberate choice, not a
+     * surprise.
+     */
+    public bool $confirmingDeleteHasPersonalLedger = false;
 
     /**
      * Captured once in mount() — a paginator built or re-resolved mid-session
@@ -128,6 +141,58 @@ new class extends Component
         session()->flash('status', $editing ? 'User updated.' : 'User added.');
     }
 
+    public function confirmDelete(int $userId): void
+    {
+        $user = User::findOrFail($userId);
+
+        if ($user->id === auth()->id()) {
+            $this->deleteBlockedMessage = "You can't delete your own account.";
+            $this->dispatch('open-modal', 'user-delete-blocked');
+
+            return;
+        }
+
+        if ($this->isLastActiveSuperAdmin($user)) {
+            $this->deleteBlockedMessage = 'This is the last active Super Admin — promote someone else first.';
+            $this->dispatch('open-modal', 'user-delete-blocked');
+
+            return;
+        }
+
+        $this->confirmingDeleteId = $userId;
+        $this->confirmingDeleteHasPersonalLedger = PersonalContact::where('user_id', $userId)->exists();
+        $this->dispatch('open-modal', 'confirm-user-deletion');
+    }
+
+    public function delete(): void
+    {
+        Gate::authorize('users.manage');
+
+        if ($this->confirmingDeleteId) {
+            $user = User::find($this->confirmingDeleteId);
+
+            // A disabled control isn't a security boundary — re-check
+            // authoritatively at delete time too, same as confirmDelete().
+            if ($user && $user->id !== auth()->id() && ! $this->isLastActiveSuperAdmin($user)) {
+                $user->delete();
+                session()->flash('status', 'User deleted.');
+            }
+        }
+
+        $this->confirmingDeleteId = null;
+        $this->dispatch('close-modal', 'confirm-user-deletion');
+    }
+
+    private function isLastActiveSuperAdmin(User $user): bool
+    {
+        return $user->role === UserRole::SuperAdmin
+            && $user->is_active
+            && ! User::where('role', UserRole::SuperAdmin)
+                ->where('is_active', true)
+                ->whereKeyNot($user->id)
+                ->exists();
+    }
+
     public function with(): array
     {
         return [
@@ -175,6 +240,9 @@ new class extends Component
                         <td class="px-4 py-2 text-right">
                             <button type="button" wire:click="startEdit({{ $user->id }})" class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
                                 Edit
+                            </button>
+                            <button type="button" wire:click="confirmDelete({{ $user->id }})" class="ml-3 text-xs font-medium text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">
+                                Delete
                             </button>
                         </td>
                     </tr>
@@ -239,5 +307,35 @@ new class extends Component
                 </x-primary-button>
             </div>
         </form>
+    </x-modal>
+
+    <x-modal name="confirm-user-deletion" focusable>
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Delete this user?</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                This cannot be undone. Their name stays on any purchases, sales, payments, invoices or
+                expenses they created, but is no longer linked to an account.
+            </p>
+            @if ($confirmingDeleteHasPersonalLedger)
+                <p class="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
+                    This user has Personal Ledger contacts, sales and payments — deleting the account
+                    permanently erases that ledger data too.
+                </p>
+            @endif
+            <div class="mt-6 flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
+                <x-danger-button type="button" wire:click="delete">Delete</x-danger-button>
+            </div>
+        </div>
+    </x-modal>
+
+    <x-modal name="user-delete-blocked" focusable>
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Can't delete this user</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ $deleteBlockedMessage }}</p>
+            <div class="mt-6 flex justify-end">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Close</x-secondary-button>
+            </div>
+        </div>
     </x-modal>
 </div>

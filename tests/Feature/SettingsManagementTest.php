@@ -1,6 +1,9 @@
 <?php
 
+use App\Models\PersonalContact;
 use App\Models\Setting;
+use App\Models\TiffinItem;
+use App\Models\TiffinItemPurchase;
 use App\Models\User;
 use App\Permission;
 use App\UserRole;
@@ -144,6 +147,90 @@ test('a super admin cannot demote the last remaining active super admin', functi
         ->set('role', UserRole::Staff->value)
         ->call('save')
         ->assertSet('formError', "You can't remove your own Super Admin access.");
+});
+
+test('a super admin can delete a user, keeping that user\'s past records but unlinking them', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $staff = User::factory()->staff()->create();
+    $purchase = TiffinItemPurchase::create([
+        'tiffin_item_id' => TiffinItem::create(['name' => 'Egg'])->id,
+        'purchase_date' => '2026-09-01',
+        'quantity' => 100,
+        'cost_rate' => 10,
+        'cost_amount' => 1000,
+        'created_by' => $staff->id,
+    ]);
+    $this->actingAs($superAdmin);
+
+    Volt::test('settings.user-manager')
+        ->call('confirmDelete', $staff->id)
+        ->call('delete');
+
+    $this->assertDatabaseMissing('users', ['id' => $staff->id]);
+    expect($purchase->fresh()->created_by)->toBeNull();
+});
+
+test('a super admin cannot delete their own account', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $this->actingAs($superAdmin);
+
+    Volt::test('settings.user-manager')
+        ->call('confirmDelete', $superAdmin->id)
+        ->assertSet('deleteBlockedMessage', "You can't delete your own account.");
+
+    $this->assertDatabaseHas('users', ['id' => $superAdmin->id]);
+});
+
+test('a super admin can delete another super admin as long as one active one remains', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $otherSuperAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $this->actingAs($superAdmin);
+
+    Volt::test('settings.user-manager')
+        ->call('confirmDelete', $otherSuperAdmin->id)
+        ->call('delete');
+
+    $this->assertDatabaseMissing('users', ['id' => $otherSuperAdmin->id]);
+});
+
+test('the last remaining active super admin cannot be deleted', function () {
+    $lastSuperAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    // A different actor than the target, so this exercises the
+    // last-active-super-admin guard rather than the self-delete guard.
+    $staff = User::factory()->staff()->create();
+    $this->actingAs($staff);
+
+    Volt::test('settings.user-manager')
+        ->call('confirmDelete', $lastSuperAdmin->id)
+        ->assertSet('deleteBlockedMessage', 'This is the last active Super Admin — promote someone else first.');
+
+    $this->assertDatabaseHas('users', ['id' => $lastSuperAdmin->id]);
+});
+
+test('deleting a user who owns personal ledger data also erases that ledger, flagged in the confirm dialog', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $ledgerOwner = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $contact = PersonalContact::factory()->create(['user_id' => $ledgerOwner->id]);
+    $this->actingAs($superAdmin);
+
+    Volt::test('settings.user-manager')
+        ->call('confirmDelete', $ledgerOwner->id)
+        ->assertSet('confirmingDeleteHasPersonalLedger', true)
+        ->call('delete');
+
+    $this->assertDatabaseMissing('users', ['id' => $ledgerOwner->id]);
+    $this->assertDatabaseMissing('personal_contacts', ['id' => $contact->id]);
+});
+
+test('an accountant cannot delete a user', function () {
+    $accountant = User::factory()->accountant()->create();
+    $staff = User::factory()->staff()->create();
+    $this->actingAs($accountant);
+
+    Volt::test('settings.user-manager')
+        ->call('confirmDelete', $staff->id)
+        ->call('delete')
+        ->assertForbidden();
 });
 
 test('deactivating a user blocks them from logging in', function () {
