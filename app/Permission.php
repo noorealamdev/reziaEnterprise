@@ -139,17 +139,4 @@ enum Permission: string
 
         return $grouped;
     }
-
-    /**
-     * Accountant may create/submit and view, but must never edit, delete,
-     * or manage structural/branding settings — every permission ending in
-     * .modify or .manage is out of reach for that role, full stop. Every
-     * permission value follows the {domain}.{view|create|modify|manage}
-     * convention, so this is a suffix check rather than a hand-maintained
-     * list that a new permission could slip past.
-     */
-    public function isAccountantEligible(): bool
-    {
-        return ! str_ends_with($this->value, '.modify') && ! str_ends_with($this->value, '.manage');
-    }
 }
