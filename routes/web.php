@@ -13,41 +13,6 @@ use Illuminate\Support\Facades\Route;
 // (authenticated), reached via the "Staff Login" link on this page.
 Route::view('/', 'home')->name('home');
 
-// Deliberately unauthenticated (token-guarded instead of ->middleware('auth'))
-// so this still works when a stale cache is the very thing breaking the
-// login page — e.g. Livewire's asset route silently disappearing under
-// route:cache (see app/Permission.php-adjacent note in .ai/rules/app.md
-// for the general Carbon gotcha; this one is deploy-environment specific).
-// Never runs route:cache here — Livewire registers a closure-based asset
-// route that route:cache silently drops, 404ing /livewire/livewire.js.
-Route::get('system/clear-cache/{token}', function (string $token) {
-    if (blank(config('app.cache_clear_token')) || ! hash_equals((string) config('app.cache_clear_token'), $token)) {
-        abort(404);
-    }
-
-    Artisan::call('config:clear');
-    Artisan::call('route:clear');
-    Artisan::call('view:clear');
-    Artisan::call('cache:clear');
-    Artisan::call('config:cache');
-    Artisan::call('view:cache');
-
-    return "Cache cleared and re-cached (config, view).\nRoute cache intentionally left cleared, not rebuilt — running route:cache breaks Livewire's asset route on this app.";
-})->name('system.clear-cache');
-
-// Same token guard as system.clear-cache above, not left open — storage:link
-// is safe to hit repeatedly (Artisan::call swallows the "link already
-// exists" failure as a normal non-zero exit rather than throwing).
-Route::get('system/storage-link/{token}', function (string $token) {
-    if (blank(config('app.cache_clear_token')) || ! hash_equals((string) config('app.cache_clear_token'), $token)) {
-        abort(404);
-    }
-
-    Artisan::call('storage:link');
-
-    return "storage:link ran.\n".Artisan::output();
-})->name('system.storage-link');
-
 // No permission gate here on purpose — this is the hardcoded post-login
 // landing page (see login.blade.php's redirectIntended default), so it
 // must stay reachable by every authenticated user regardless of role.

@@ -56,21 +56,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Cache-Clear Route Token
-    |--------------------------------------------------------------------------
-    |
-    | Guards the unauthenticated GET route that clears + rebuilds config,
-    | route, and view caches (routes/web.php). Deliberately unauthenticated
-    | so it still works when a stale/broken cache is the very thing keeping
-    | the login page itself from working — set this in production .env and
-    | keep it secret; the route 404s without a matching token.
-    |
-    */
-
-    'cache_clear_token' => env('CACHE_CLEAR_TOKEN'),
-
-    /*
-    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |
