@@ -13,6 +13,24 @@ use Illuminate\Support\Facades\Route;
 // (authenticated), reached via the "Staff Login" link on this page.
 Route::view('/', 'home')->name('home');
 
+// No auth/token guard, by request — one plain link to hit after a deploy
+// or a .env change. Never runs route:cache: Livewire registers a
+// closure-based asset route that route:cache silently drops, 404ing
+// /livewire/livewire.js (hit this exact bug during the aaPanel deploy).
+// storage:link is safe to re-run — Artisan::call swallows its "link
+// already exists" failure as a normal non-zero exit rather than throwing.
+Route::get('system/clear', function () {
+    Artisan::call('config:clear');
+    Artisan::call('route:clear');
+    Artisan::call('view:clear');
+    Artisan::call('cache:clear');
+    Artisan::call('storage:link');
+    Artisan::call('config:cache');
+    Artisan::call('view:cache');
+
+    return "Cache cleared and re-cached (config, view), storage:link ran.\nRoute cache intentionally left cleared, not rebuilt — running route:cache breaks Livewire's asset route on this app.";
+})->name('system.refresh');
+
 // No permission gate here on purpose — this is the hardcoded post-login
 // landing page (see login.blade.php's redirectIntended default), so it
 // must stay reachable by every authenticated user regardless of role.
