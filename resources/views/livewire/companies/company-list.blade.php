@@ -59,7 +59,7 @@ new class extends Component
                     ->where('name', 'like', "%{$this->search}%")
                     ->orWhere('code', 'like', "%{$this->search}%")))
                 ->orderBy('name')
-                ->simplePaginate(10)
+                ->simplePaginate(20)
                 ->setPath($this->paginationPath)
                 ->appends(array_filter(['q' => $this->search])),
         ];

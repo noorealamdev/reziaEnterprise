@@ -104,6 +104,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:egg_purchases.view')
         ->name('egg-purchases.index');
 
+    Route::get('egg-sales', fn () => view('egg-sales.index'))
+        ->middleware('can:egg_sales.view')
+        ->name('egg-sales.index');
+
     Route::get('company-purchases', fn () => view('company-purchases.index'))
         ->middleware('can:company_purchases.view')
         ->name('company-purchases.index');

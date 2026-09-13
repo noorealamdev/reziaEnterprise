@@ -148,7 +148,7 @@ test('an employee\'s payment history paginates without losing any recorded payme
     $user = User::factory()->create();
     $employee = Employee::factory()->create(['monthly_salary' => 10000]);
 
-    foreach (range(1, 12) as $i) {
+    foreach (range(1, 22) as $i) {
         $employee->salaryPayments()->create([
             'for_month' => now()->subMonths($i)->startOfMonth()->toDateString(),
             'amount' => 1000,
@@ -161,16 +161,16 @@ test('an employee\'s payment history paginates without losing any recorded payme
     $component = Volt::test('employees.employee-detail', ['employee' => $employee]);
 
     // Only one page's worth renders in the list...
-    expect($component->viewData('payments'))->toHaveCount(10);
+    expect($component->viewData('payments'))->toHaveCount(20);
     // ...but nothing was dropped from the database itself.
-    expect($employee->salaryPayments()->count())->toBe(12);
+    expect($employee->salaryPayments()->count())->toBe(22);
 });
 
 test('the staff salaries statement paginates without dropping any employee from the totals', function () {
     $user = User::factory()->create();
 
-    // More than one screen page's worth (15 per page).
-    foreach (range(1, 18) as $i) {
+    // More than one screen page's worth (30 per page).
+    foreach (range(1, 33) as $i) {
         Employee::factory()->create(['monthly_salary' => 1000]);
     }
 
@@ -179,7 +179,7 @@ test('the staff salaries statement paginates without dropping any employee from 
     $component = Volt::test('staff-salaries.staff-salaries');
 
     // Only one page's worth of rows renders...
-    expect($component->viewData('rows'))->toHaveCount(15);
-    // ...but the totals still account for all 18 employees.
-    expect($component->viewData('totalExpected'))->toBe(18000.0);
+    expect($component->viewData('rows'))->toHaveCount(30);
+    // ...but the totals still account for all 33 employees.
+    expect($component->viewData('totalExpected'))->toBe(33000.0);
 });

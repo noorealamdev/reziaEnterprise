@@ -73,7 +73,7 @@ new class extends Component
         $billedTotal = (float) JobEntry::whereNotNull('invoice_id')->sum('bill_amount')
             + (float) Invoice::whereNotNull('manual_amount')->sum('manual_amount');
 
-        // Balance still owed per invoice — bill total (+VAT), minus any
+        // Balance still owed per invoice — bill total (-VAT), minus any
         // pre-invoice advance, minus payments recorded against it since. A
         // Partially Paid invoice still owes something, so it's included
         // alongside Due ones; Paid invoices are excluded since their balance
@@ -87,7 +87,7 @@ new class extends Component
                 $amount = (float) ($invoice->manual_amount ?? $invoice->amount);
                 $vatAmount = $invoice->vat_percent ? round($amount * (float) $invoice->vat_percent / 100, 2) : 0;
 
-                return max(0, $amount + $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);
+                return max(0, $amount - $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);
             });
 
         $thisMonthTotal = JobEntry::whereBetween('entry_date', [

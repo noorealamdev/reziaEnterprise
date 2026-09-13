@@ -123,7 +123,7 @@ new class extends Component
             $purchase = TiffinItemPurchase::findFor($itemName, $this->entry_date);
 
             if ($purchase) {
-                $this->costRates[$itemName] = (string) $purchase->cost_rate;
+                $this->costRates[$itemName] = (string) $purchase->sale_rate;
             }
         }
     }
@@ -161,7 +161,7 @@ new class extends Component
                 // A disabled input isn't a security boundary — re-check
                 // authoritatively at save time, same as the create path.
                 $purchase = TiffinItemPurchase::findFor($itemName, $this->entry_date);
-                $costRate = $purchase ? (float) $purchase->cost_rate : (float) $this->costRates[$itemName];
+                $costRate = $purchase ? (float) $purchase->sale_rate : (float) $this->costRates[$itemName];
 
                 JobEntry::findOrFail($id)->update([
                     'entry_date' => $this->entry_date,
@@ -262,7 +262,7 @@ new class extends Component
                     <p class="mt-2 text-xs text-brand-700 dark:text-brand-300">
                         Locked from the
                         {{ $purchaseLocks[$itemName]->purchase_date->isSameDay($entry_date) ? "day's" : $purchaseLocks[$itemName]->purchase_date->format('d M Y')."'s" }}
-                        purchase: {{ rtrim(rtrim(number_format((float) $purchaseLocks[$itemName]->quantity, 2), '0'), '.') }} @ {{ number_format((float) $purchaseLocks[$itemName]->cost_rate, 2) }}
+                        purchase: {{ rtrim(rtrim(number_format((float) $purchaseLocks[$itemName]->quantity, 2), '0'), '.') }} @ {{ number_format((float) $purchaseLocks[$itemName]->sale_rate, 2) }} sale rate
                         @if ($purchaseLocks[$itemName]->supplier_name)
                             from {{ $purchaseLocks[$itemName]->supplier_name }}
                         @endif

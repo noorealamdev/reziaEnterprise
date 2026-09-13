@@ -34,15 +34,15 @@ test('year and month filters narrow the listed purchases', function () {
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2025-08-10',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
     ]);
     TiffinItemPurchase::create([
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-03-05',
         'quantity' => 500,
-        'cost_rate' => 12,
-        'cost_amount' => 6000,
+        'purchase_rate' => 12,
+        'purchase_amount' => 6000,
     ]);
 
     $this->actingAs($user);
@@ -73,22 +73,22 @@ test('the purchases quick range filter only counts purchases within that window'
         'tiffin_item_id' => $egg->id,
         'purchase_date' => now()->subDays(3)->toDateString(),
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
     ]);
     TiffinItemPurchase::create([
         'tiffin_item_id' => $egg->id,
         'purchase_date' => now()->subDays(20)->toDateString(),
         'quantity' => 500,
-        'cost_rate' => 12,
-        'cost_amount' => 6000,
+        'purchase_rate' => 12,
+        'purchase_amount' => 6000,
     ]);
     TiffinItemPurchase::create([
         'tiffin_item_id' => $egg->id,
         'purchase_date' => now()->subDays(25)->toDateString(),
         'quantity' => 600,
-        'cost_rate' => 13,
-        'cost_amount' => 7800,
+        'purchase_rate' => 13,
+        'purchase_amount' => 7800,
     ]);
 
     $this->actingAs($user);
@@ -137,15 +137,15 @@ test('findFor carries forward the most recent purchase on or before the date, no
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-08-28',
         'quantity' => 500,
-        'cost_rate' => 11,
-        'cost_amount' => 5500,
+        'purchase_rate' => 11,
+        'purchase_amount' => 5500,
     ]);
     $newer = TiffinItemPurchase::create([
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-01',
         'quantity' => 500,
-        'cost_rate' => 12.5,
-        'cost_amount' => 6250,
+        'purchase_rate' => 12.5,
+        'purchase_amount' => 6250,
     ]);
 
     // No purchase recorded on the 3rd itself — should carry forward the
@@ -174,14 +174,15 @@ test('a purchase remarks is shown on its row in the purchases list', function ()
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
         ->set('quantity', '500')
-        ->set('cost_rate', '12.5')
+        ->set('purchase_rate', '12.5')
+        ->set('sale_rate', '13.5')
         ->set('remarks', 'Paid half in advance, rest on delivery')
         ->call('save')
         ->assertHasNoErrors()
         ->assertSee('Paid half in advance, rest on delivery');
 });
 
-test('recording a purchase persists with a computed cost amount', function () {
+test('recording a purchase persists with a computed purchase amount, and a profit derived from the sale rate', function () {
     $user = User::factory()->create();
     $egg = TiffinItem::create(['name' => 'Egg']);
 
@@ -192,7 +193,8 @@ test('recording a purchase persists with a computed cost amount', function () {
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
         ->set('quantity', '500')
-        ->set('cost_rate', '12.5')
+        ->set('purchase_rate', '12.5')
+        ->set('sale_rate', '13.5')
         ->set('supplier_name', 'Karim Traders')
         ->call('save')
         ->assertHasNoErrors();
@@ -200,13 +202,16 @@ test('recording a purchase persists with a computed cost amount', function () {
     $this->assertDatabaseHas('tiffin_item_purchases', [
         'tiffin_item_id' => $egg->id,
         'quantity' => 500,
-        'cost_rate' => 12.5,
-        'cost_amount' => 6250,
+        'purchase_rate' => 12.5,
+        'purchase_amount' => 6250,
+        'sale_rate' => 13.5,
         'supplier_name' => 'Karim Traders',
     ]);
 
     $purchase = TiffinItemPurchase::where('tiffin_item_id', $egg->id)->firstOrFail();
     expect($purchase->purchase_date->toDateString())->toBe('2026-09-02');
+    // 500 * (13.5 - 12.5) = 500.
+    expect($purchase->profit)->toBe(500.0);
 });
 
 test('selecting an item and date that already has a purchase loads it instead of erroring', function () {
@@ -216,8 +221,9 @@ test('selecting an item and date that already has a purchase loads it instead of
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
+        'sale_rate' => 11,
     ]);
 
     $this->actingAs($user);
@@ -228,7 +234,8 @@ test('selecting an item and date that already has a purchase loads it instead of
         ->set('purchase_date', '2026-09-02')
         ->assertSet('editingId', $existing->id)
         ->assertSet('quantity', '400.00')
-        ->assertSet('cost_rate', '10.00');
+        ->assertSet('purchase_rate', '10.00')
+        ->assertSet('sale_rate', '11.00');
 
     $this->assertDatabaseCount('tiffin_item_purchases', 1);
 });
@@ -240,8 +247,9 @@ test('editing a purchase updates it', function () {
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
+        'sale_rate' => 10,
     ]);
 
     $this->actingAs($user);
@@ -249,13 +257,15 @@ test('editing a purchase updates it', function () {
     Volt::test('egg-purchases.purchase-manager')
         ->call('startEdit', $purchase->id)
         ->set('quantity', '450')
-        ->set('cost_rate', '11')
+        ->set('purchase_rate', '11')
+        ->set('sale_rate', '12')
         ->call('save')
         ->assertHasNoErrors();
 
     expect((float) $purchase->fresh()->quantity)->toBe(450.0);
-    expect((float) $purchase->fresh()->cost_rate)->toBe(11.0);
-    expect((float) $purchase->fresh()->cost_amount)->toBe(4950.0);
+    expect((float) $purchase->fresh()->purchase_rate)->toBe(11.0);
+    expect((float) $purchase->fresh()->purchase_amount)->toBe(4950.0);
+    expect((float) $purchase->fresh()->sale_rate)->toBe(12.0);
 });
 
 test('deleting a purchase removes it', function () {
@@ -265,8 +275,8 @@ test('deleting a purchase removes it', function () {
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
     ]);
 
     $this->actingAs($user);
@@ -303,7 +313,7 @@ test('starting a new purchase pre-selects Egg', function () {
         ->assertSet('tiffin_item_id', $egg->id);
 });
 
-test('quantity and cost rate are required', function () {
+test('quantity, purchase rate and sale rate are required', function () {
     $user = User::factory()->create();
     $egg = TiffinItem::create(['name' => 'Egg']);
 
@@ -314,7 +324,7 @@ test('quantity and cost rate are required', function () {
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
         ->call('save')
-        ->assertHasErrors(['quantity', 'cost_rate']);
+        ->assertHasErrors(['quantity', 'purchase_rate', 'sale_rate']);
 });
 
 test('supply by item defaults to purchases view with Banana pre-selected', function () {
@@ -493,8 +503,8 @@ test('an accountant can record a purchase but gets a 403 trying to edit or delet
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-01',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
     ]);
 
     $this->actingAs($accountant);
@@ -504,7 +514,8 @@ test('an accountant can record a purchase but gets a 403 trying to edit or delet
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-05')
         ->set('quantity', '100')
-        ->set('cost_rate', '11')
+        ->set('purchase_rate', '11')
+        ->set('sale_rate', '12')
         ->call('save')
         ->assertHasNoErrors();
 
@@ -533,7 +544,8 @@ test('uploading a purchase memo stores it against the purchase', function () {
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
         ->set('quantity', '500')
-        ->set('cost_rate', '12.5')
+        ->set('purchase_rate', '12.5')
+        ->set('sale_rate', '13.5')
         ->set('memoFile', UploadedFile::fake()->image('memo.jpg'))
         ->call('save')
         ->assertHasNoErrors();
@@ -556,7 +568,8 @@ test('the purchase memo upload rejects a file that is not an image or pdf', func
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')
         ->set('quantity', '500')
-        ->set('cost_rate', '12.5')
+        ->set('purchase_rate', '12.5')
+        ->set('sale_rate', '13.5')
         ->set('memoFile', UploadedFile::fake()->create('memo.docx', 100))
         ->call('save')
         ->assertHasErrors(['memoFile']);
@@ -573,8 +586,9 @@ test('editing a purchase without choosing a new file keeps the existing memo', f
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
+        'sale_rate' => 11,
         'memo_path' => 'purchase-memos/existing.jpg',
     ]);
     Storage::disk('public')->put('purchase-memos/existing.jpg', 'fake-image-content');
@@ -601,8 +615,9 @@ test('choosing a new memo file while editing replaces and deletes the old one', 
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
+        'sale_rate' => 11,
         'memo_path' => 'purchase-memos/old.jpg',
     ]);
     Storage::disk('public')->put('purchase-memos/old.jpg', 'fake-image-content');
@@ -631,8 +646,9 @@ test('removing a memo without uploading a replacement clears it and deletes the 
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
+        'sale_rate' => 11,
         'memo_path' => 'purchase-memos/existing.jpg',
     ]);
     Storage::disk('public')->put('purchase-memos/existing.jpg', 'fake-image-content');
@@ -659,8 +675,9 @@ test('deleting a purchase also deletes its memo file from storage', function () 
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-02',
         'quantity' => 400,
-        'cost_rate' => 10,
-        'cost_amount' => 4000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 4000,
+        'sale_rate' => 11,
         'memo_path' => 'purchase-memos/existing.jpg',
     ]);
     Storage::disk('public')->put('purchase-memos/existing.jpg', 'fake-image-content');

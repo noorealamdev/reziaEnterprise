@@ -18,7 +18,7 @@ test('Total Billed always reconciles to Total Paid plus Total Outstanding, acros
     $category = makeServiceCategory('Daily Basic Labour');
 
     // Invoice 1: a normal, generated invoice. 3 entries summing to 10,000,
-    // 15% VAT -> grand total 11,500, partially paid 5,000 -> balance 6,500.
+    // 15% VAT deducted -> grand total 8,500, partially paid 5,000 -> balance 3,500.
     JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-05', 'bill_amount' => 3000]);
     JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-12', 'bill_amount' => 4000]);
     JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-03-20', 'bill_amount' => 3000]);
@@ -44,8 +44,8 @@ test('Total Billed always reconciles to Total Paid plus Total Outstanding, acros
 
     expect($generatedInvoice->fresh()->status)->toBe('partial');
 
-    // Invoice 2: a past bill, typed in directly. 20,000, 10% VAT -> grand
-    // total 22,000, paid in full -> balance 0.
+    // Invoice 2: a past bill, typed in directly. 20,000, 10% VAT deducted ->
+    // grand total 18,000, paid in full -> balance 0.
     Volt::test('invoices.manual-invoice-form')
         ->set('company_id', $company->id)
         ->set('service_category_id', $category->id)
@@ -60,7 +60,7 @@ test('Total Billed always reconciles to Total Paid plus Total Outstanding, acros
 
     Volt::test('invoices.invoice-detail', ['invoice' => $manualInvoice])
         ->call('startRecordPayment')
-        ->set('paymentAmount', '22000')
+        ->set('paymentAmount', '18000')
         ->set('paymentDate', '2026-01-15')
         ->call('recordPayment')
         ->assertHasNoErrors();
@@ -73,12 +73,12 @@ test('Total Billed always reconciles to Total Paid plus Total Outstanding, acros
     $statement = Volt::test('bill-statement.bill-statement')
         ->set('companyFilter', (string) $company->id);
 
-    // 11,500 (generated, incl. VAT) + 22,000 (manual, incl. VAT) + 3,000 (pending) = 36,500.
-    expect($statement->viewData('totalBilled'))->toBe(36500.0);
-    // 5,000 + 22,000 = 27,000 (no advances involved here).
-    expect($statement->viewData('totalPaid'))->toBe(27000.0);
-    // 6,500 (generated) + 0 (manual, fully paid) + 3,000 (pending) = 9,500.
-    expect($statement->viewData('totalOutstanding'))->toBe(9500.0);
+    // 8,500 (generated, VAT deducted) + 18,000 (manual, VAT deducted) + 3,000 (pending) = 29,500.
+    expect($statement->viewData('totalBilled'))->toBe(29500.0);
+    // 5,000 + 18,000 = 23,000 (no advances involved here).
+    expect($statement->viewData('totalPaid'))->toBe(23000.0);
+    // 3,500 (generated) + 0 (manual, fully paid) + 3,000 (pending) = 6,500.
+    expect($statement->viewData('totalOutstanding'))->toBe(6500.0);
 
     // The invariant the code relies on: nothing is billed that isn't
     // accounted for as either paid or still outstanding.
@@ -93,15 +93,48 @@ test('Total Billed always reconciles to Total Paid plus Total Outstanding, acros
     expect($dashboard->viewData('billedTotal'))->toBeGreaterThanOrEqual(30000.0);
 });
 
+test('a VAT invoice shows both the actual (pre-VAT) amount and the net amount', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-06-15',
+        'bill_amount' => 1000,
+    ]);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('period', '2026-06')
+        ->set('invoice_number', 'RE/VAT-TEST/062026')
+        ->set('vatRate', '10')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $row = Volt::test('bill-statement.bill-statement')
+        ->set('companyFilter', (string) $company->id)
+        ->viewData('rows')
+        ->sole();
+
+    // 1,000 raw, 10% VAT deducted -> 900 net.
+    expect($row->actualAmount)->toBe(1000.0);
+    expect($row->amount)->toBe(900.0);
+});
+
 test('screen pagination never drops a row from the printed statement or the totals', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $category = makeServiceCategory('Daily Basic Labour');
 
-    // More than one screen page's worth (15 per page) — one JobEntry per
+    // More than one screen page's worth (30 per page) — one JobEntry per
     // month, since pending rows group by company+category+month, not by
     // individual entry.
-    foreach (range(1, 20) as $i) {
+    foreach (range(1, 35) as $i) {
         JobEntry::factory()->create([
             'company_id' => $company->id,
             'service_category_id' => $category->id,
@@ -117,9 +150,9 @@ test('screen pagination never drops a row from the printed statement or the tota
 
     // $rows itself (what the print block renders from) always holds every
     // filtered row regardless of the on-screen page — the printed
-    // document must show all 20, not just one page's worth.
-    expect($component->viewData('rows'))->toHaveCount(20);
-    expect($component->viewData('totalBilled'))->toBe(2000.0);
+    // document must show all 35, not just one page's worth.
+    expect($component->viewData('rows'))->toHaveCount(35);
+    expect($component->viewData('totalBilled'))->toBe(3500.0);
 
     // Rows past the first page are still in the HTML (present for print),
     // just hidden on screen — confirms nothing was silently dropped from

@@ -11,7 +11,7 @@ new class extends Component
 {
     use WithPagination;
 
-    private const PER_PAGE = 15;
+    private const PER_PAGE = 30;
 
     #[Url(as: 'month', history: true)]
     public string $period = '';

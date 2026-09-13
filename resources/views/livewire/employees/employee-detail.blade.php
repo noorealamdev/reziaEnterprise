@@ -119,7 +119,7 @@ new class extends Component
             ->orderByDesc('for_month')
             ->orderByDesc('paid_on')
             ->orderByDesc('id')
-            ->simplePaginate(10)
+            ->simplePaginate(20)
             ->setPath($this->paginationPath);
 
         return [

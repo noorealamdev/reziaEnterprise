@@ -68,7 +68,7 @@ new class extends Component
             'employees' => Employee::query()
                 ->when($this->search, fn ($query) => $query->where('name', 'like', "%{$this->search}%"))
                 ->orderBy('name')
-                ->simplePaginate(10)
+                ->simplePaginate(20)
                 ->setPath($this->paginationPath)
                 ->appends(array_filter(['q' => $this->search])),
         ];

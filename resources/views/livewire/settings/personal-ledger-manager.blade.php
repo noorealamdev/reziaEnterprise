@@ -15,7 +15,7 @@ new class extends Component
 {
     use WithPagination;
 
-    private const PER_PAGE = 15;
+    private const PER_PAGE = 30;
 
     #[Url(as: 'plview', history: true)]
     public string $activeView = 'contacts';

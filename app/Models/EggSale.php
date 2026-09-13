@@ -17,7 +17,7 @@ class EggSale extends Model
         'quantity',
         'sale_rate',
         'sale_amount',
-        'buyer_name',
+        'egg_buyer_id',
         'payment_status',
         'in_charge',
         'remarks',
@@ -40,5 +40,10 @@ class EggSale extends Model
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function buyer(): BelongsTo
+    {
+        return $this->belongsTo(EggBuyer::class, 'egg_buyer_id');
     }
 }

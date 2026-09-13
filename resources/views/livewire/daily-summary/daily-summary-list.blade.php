@@ -99,7 +99,7 @@ new class extends Component
             // by hand — LengthAwarePaginator wraps a page-sized slice while
             // still tracking the total, the same way Job Entries/Tiffin
             // Purchases paginate their real Eloquent queries.
-            $perPage = 15;
+            $perPage = 30;
             $days = (new LengthAwarePaginator(
                 $filteredDays->forPage($this->getPage(), $perPage)->values(),
                 $filteredDays->count(),

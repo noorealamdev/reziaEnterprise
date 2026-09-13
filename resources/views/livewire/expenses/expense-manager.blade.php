@@ -144,7 +144,7 @@ new class extends Component
         $filteredTotal = (float) (clone $query)->sum('amount');
 
         return [
-            'expenses' => $query->orderByDesc('expense_date')->orderByDesc('id')->simplePaginate(10)
+            'expenses' => $query->orderByDesc('expense_date')->orderByDesc('id')->simplePaginate(20)
                 ->setPath($this->paginationPath)
                 ->appends(array_filter(['year' => $this->yearFilter, 'month' => $this->monthFilter])),
             'availableYears' => $availableYears,

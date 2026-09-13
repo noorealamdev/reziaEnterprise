@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\EggBuyer;
 use App\Models\EggSale;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -25,7 +26,7 @@ class EggSaleFactory extends Factory
             'quantity' => $quantity,
             'sale_rate' => $saleRate,
             'sale_amount' => round($quantity * $saleRate, 2),
-            'buyer_name' => fake()->company(),
+            'egg_buyer_id' => EggBuyer::factory(),
             'payment_status' => 'cash',
             'in_charge' => null,
             'remarks' => null,

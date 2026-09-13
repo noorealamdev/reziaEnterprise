@@ -174,6 +174,134 @@ test('generating never pulls in a different categorys entries for the same compa
     expect($dieselEntry->fresh()->invoice_id)->toBeNull();
 });
 
+test('generating a Tiffin invoice for a company with departments requires picking one, and bills only that department', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+    $washWorker = TiffinDepartment::create(['name' => 'Wash Worker']);
+    $company->tiffinDepartments()->attach([$swing->id, $washWorker->id]);
+
+    $swingEntry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => '2026-08-15',
+        'bill_amount' => 1000,
+    ]);
+    $washWorkerEntry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $washWorker->id,
+        'entry_date' => '2026-08-16',
+        'bill_amount' => 800,
+    ]);
+
+    $this->actingAs($user);
+
+    // Leaving the department unset is rejected — factories want Swing and
+    // Wash Worker billed separately, never combined into one invoice.
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $tiffin->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/TIF-SWING/082026')
+        ->call('generate')
+        ->assertHasErrors(['tiffin_department_id']);
+    expect(Invoice::count())->toBe(0);
+
+    // Picking Swing only bills Swing's entries.
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $tiffin->id)
+        ->set('tiffin_department_id', $swing->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/TIF-SWING/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $swingInvoice = Invoice::where('invoice_number', 'RE/AAL/TIF-SWING/082026')->sole();
+    expect($swingInvoice->jobEntries()->count())->toBe(1);
+    expect($swingEntry->fresh()->invoice_id)->toBe($swingInvoice->id);
+    expect($washWorkerEntry->fresh()->invoice_id)->toBeNull();
+
+    // Wash Worker's own entries need their own, separate invoice.
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $tiffin->id)
+        ->set('tiffin_department_id', $washWorker->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/TIF-WASH/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $washInvoice = Invoice::where('invoice_number', 'RE/AAL/TIF-WASH/082026')->sole();
+    expect($washInvoice->jobEntries()->count())->toBe(1);
+    expect($washWorkerEntry->fresh()->invoice_id)->toBe($washInvoice->id);
+    expect(Invoice::count())->toBe(2);
+});
+
+test('a department belonging to a different company is rejected when generating a Tiffin invoice', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $otherCompany = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+    $company->tiffinDepartments()->attach($swing->id);
+    // Belongs only to the other company, not this one.
+    $otherCompanyDept = TiffinDepartment::create(['name' => 'Wash Worker']);
+    $otherCompany->tiffinDepartments()->attach($otherCompanyDept->id);
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => '2026-08-15',
+        'bill_amount' => 1000,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $tiffin->id)
+        ->set('tiffin_department_id', $otherCompanyDept->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/TIF/082026')
+        ->call('generate')
+        ->assertHasErrors(['tiffin_department_id']);
+
+    expect(Invoice::count())->toBe(0);
+});
+
+test('a company with no Tiffin departments configured invoices Tiffin exactly as before, with no department picker', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+
+    $entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'entry_date' => '2026-08-15',
+        'bill_amount' => 1000,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $tiffin->id);
+
+    expect($component->viewData('tiffinDepartments'))->toBeEmpty();
+
+    $component->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/TIF/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    expect($entry->fresh()->invoice_id)->not->toBeNull();
+});
+
 test('an off-day entry is included in the invoice but contributes zero to the total', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create(['code' => 'AAL']);
@@ -702,7 +830,7 @@ test('the invoice document shows the amount spelled out in Bangladeshi lakh/cror
         ->assertSee('Three Lakh Eighteen Thousand Five Hundred Fifty Two Taka Only.');
 });
 
-test('a VAT invoice shows the VAT line and a grand total that includes it', function () {
+test('a VAT invoice shows the VAT line and a grand total with it deducted', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $category = makeServiceCategory('Diesel Oil Supply');
@@ -727,9 +855,9 @@ test('a VAT invoice shows the VAT line and a grand total that includes it', func
 
     Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
         ->assertSee('VAT (10%)', false)
-        // Total 1000 + Vat 100 = 1100
+        // Total 1000 - Vat 100 = 900
         ->assertSee('100.00')
-        ->assertSee('1,100.00');
+        ->assertSee('900.00');
 });
 
 test('an invoice with an advance payment shows the advance and due breakdown', function () {
@@ -1144,8 +1272,8 @@ test('payment history paginates and its totals reflect every payment, not just t
         'bill_amount' => 10000,
     ]);
 
-    // More than one screen page's worth (10 per page) of small payments.
-    foreach (range(1, 12) as $i) {
+    // More than one screen page's worth (20 per page) of small payments.
+    foreach (range(1, 22) as $i) {
         $invoice->payments()->create([
             'amount' => 100,
             'paid_on' => now()->subDays($i)->toDateString(),
@@ -1157,9 +1285,9 @@ test('payment history paginates and its totals reflect every payment, not just t
     $component = Volt::test('invoices.invoice-detail', ['invoice' => $invoice]);
 
     // Only one page's worth of rows renders in the payment history list...
-    expect($component->viewData('payments'))->toHaveCount(10);
-    // ...but the balance owed accounts for all 12 payments (1200 total),
-    // not just the 10 visible on this page.
-    expect($component->viewData('totalPaidViaPayments'))->toBe(1200.0);
-    expect($component->viewData('balanceDue'))->toBe(8800.0);
+    expect($component->viewData('payments'))->toHaveCount(20);
+    // ...but the balance owed accounts for all 22 payments (2200 total),
+    // not just the 20 visible on this page.
+    expect($component->viewData('totalPaidViaPayments'))->toBe(2200.0);
+    expect($component->viewData('balanceDue'))->toBe(7800.0);
 });

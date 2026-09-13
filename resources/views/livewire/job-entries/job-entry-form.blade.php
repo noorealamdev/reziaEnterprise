@@ -242,7 +242,7 @@ new class extends Component
                 $purchase = TiffinItemPurchase::findFor($item->name, $this->entry_date);
 
                 if ($purchase) {
-                    $this->batchCostRates[$department->id][$item->name] = (string) $purchase->cost_rate;
+                    $this->batchCostRates[$department->id][$item->name] = (string) $purchase->sale_rate;
                 }
             }
         }
@@ -533,8 +533,8 @@ new class extends Component
             $purchase = TiffinItemPurchase::findFor($validated['supply_type'], $validated['entry_date']);
 
             if ($purchase) {
-                $validated['cost_rate'] = (float) $purchase->cost_rate;
-                $validated['cost_amount'] = round((float) $validated['quantity'] * (float) $purchase->cost_rate, 2);
+                $validated['cost_rate'] = (float) $purchase->sale_rate;
+                $validated['cost_amount'] = round((float) $validated['quantity'] * (float) $purchase->sale_rate, 2);
             }
         }
 
@@ -650,7 +650,7 @@ new class extends Component
                 // purchase exists for this item/date, its cost rate wins
                 // regardless of what was posted for the field.
                 $purchase = TiffinItemPurchase::findFor($item->name, $this->entry_date);
-                $costRate = $purchase ? (float) $purchase->cost_rate : (float) $this->batchCostRates[$department->id][$item->name];
+                $costRate = $purchase ? (float) $purchase->sale_rate : (float) $this->batchCostRates[$department->id][$item->name];
 
                 // Only Egg's row carries a bill — Banana/Bread (and any
                 // exchange item) are cost-tracking only.
@@ -1064,7 +1064,7 @@ new class extends Component
                                             <p class="mt-2 text-xs text-brand-700 dark:text-brand-300">
                                                 Locked from the
                                                 {{ $item->purchase->purchase_date->isSameDay($entry_date) ? "day's" : $item->purchase->purchase_date->format('d M Y')."'s" }}
-                                                purchase: {{ rtrim(rtrim(number_format((float) $item->purchase->quantity, 2), '0'), '.') }} @ {{ number_format((float) $item->purchase->cost_rate, 2) }}
+                                                purchase: {{ rtrim(rtrim(number_format((float) $item->purchase->quantity, 2), '0'), '.') }} @ {{ number_format((float) $item->purchase->sale_rate, 2) }} sale rate
                                                 @if ($item->purchase->supplier_name)
                                                     from {{ $item->purchase->supplier_name }}
                                                 @endif

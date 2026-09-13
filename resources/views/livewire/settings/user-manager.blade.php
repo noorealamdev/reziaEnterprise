@@ -196,7 +196,7 @@ new class extends Component
     public function with(): array
     {
         return [
-            'users' => User::orderBy('name')->simplePaginate(10)->setPath($this->paginationPath),
+            'users' => User::orderBy('name')->simplePaginate(20)->setPath($this->paginationPath),
             'roles' => UserRole::cases(),
         ];
     }

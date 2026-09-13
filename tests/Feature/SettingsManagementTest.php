@@ -156,8 +156,8 @@ test('a super admin can delete a user, keeping that user\'s past records but unl
         'tiffin_item_id' => TiffinItem::create(['name' => 'Egg'])->id,
         'purchase_date' => '2026-09-01',
         'quantity' => 100,
-        'cost_rate' => 10,
-        'cost_amount' => 1000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 1000,
         'created_by' => $staff->id,
     ]);
     $this->actingAs($superAdmin);
@@ -299,8 +299,8 @@ test('a super admin can grant and revoke role permissions from the roles and per
 test('the users list paginates once there are more than one page\'s worth', function () {
     $superAdmin = User::factory()->create();
 
-    // 10 per page — this plus the seeded super admin makes more than one page.
-    User::factory()->count(10)->create();
+    // 20 per page — this plus the seeded super admin makes more than one page.
+    User::factory()->count(20)->create();
 
     $this->actingAs($superAdmin);
 

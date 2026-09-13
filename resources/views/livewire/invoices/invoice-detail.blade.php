@@ -58,7 +58,7 @@ new class extends Component
 
     /**
      * What's owed on this invoice before any recorded payments are
-     * subtracted — bill total, plus VAT if any, minus any pre-invoice
+     * subtracted — bill total, minus VAT if any, minus any pre-invoice
      * advance (e.g. ETP Eid Holiday's company_adv_payment).
      */
     private function amountOwedBeforePayments(): float
@@ -67,7 +67,7 @@ new class extends Component
         $vatAmount = $this->invoice->vat_percent ? round($total * (float) $this->invoice->vat_percent / 100, 2) : 0;
         $advancePaid = (float) $this->invoice->jobEntries->sum('company_adv_payment');
 
-        return max(0, $total + $vatAmount - $advancePaid);
+        return max(0, $total - $vatAmount - $advancePaid);
     }
 
     /**
@@ -339,7 +339,7 @@ new class extends Component
 
         $total = $this->invoice->subtotal;
         $vatAmount = $this->invoice->vat_percent ? round($total * (float) $this->invoice->vat_percent / 100, 2) : null;
-        $grandTotal = $total + ($vatAmount ?? 0);
+        $grandTotal = $total - ($vatAmount ?? 0);
         $advancePaid = (float) $entries->sum('company_adv_payment');
         $due = $advancePaid > 0 ? $grandTotal - $advancePaid : null;
 
@@ -354,7 +354,7 @@ new class extends Component
             ->with('companyPurchase')
             ->orderByDesc('paid_on')
             ->orderByDesc('id')
-            ->simplePaginate(10)
+            ->simplePaginate(20)
             ->setPath($this->paginationPath)
             ->through(fn ($payment) => (object) [
                 'id' => $payment->id,
@@ -657,7 +657,7 @@ new class extends Component
                     @if ($vatAmount)
                         <tr>
                             <td class="py-1 text-slate-700 dark:text-slate-300">VAT ({{ rtrim(rtrim(number_format((float) $invoice->vat_percent, 2), '0'), '.') }}%)</td>
-                            <td class="py-1 text-right text-slate-900 dark:text-white">{{ number_format($vatAmount, 2) }}</td>
+                            <td class="py-1 text-right text-slate-900 dark:text-white">− {{ number_format($vatAmount, 2) }}</td>
                         </tr>
                         <tr class="{{ (! $due && ! $totalPaidViaPayments) ? 'font-bold text-base' : '' }}">
                             <td class="py-1 text-slate-700 dark:text-slate-300">Grand Total</td>

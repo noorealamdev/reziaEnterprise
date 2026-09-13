@@ -65,6 +65,8 @@ new class extends Component
 
     public ?int $confirmingDeletePaymentId = null;
 
+    public ?int $viewingAdjustmentsPurchaseId = null;
+
     /**
      * Captured once in mount() — a manually-built LengthAwarePaginator needs
      * an explicit 'path', and request()->url() would otherwise resolve to
@@ -327,9 +329,21 @@ new class extends Component
         session()->flash('status', 'Payment removed.');
     }
 
+    /**
+     * Which invoices this purchase's Bill Adjustments have settled, and how
+     * much of each — the client wants this visible per purchase, not just
+     * the single "Remaining: X of Y" figure it nets out to.
+     */
+    public function viewAdjustments(int $purchaseId): void
+    {
+        $this->viewingAdjustmentsPurchaseId = $purchaseId;
+        $this->dispatch('open-modal', 'company-purchase-adjustments');
+    }
+
     public function with(): array
     {
         $purchasesQuery = CompanyPurchase::with(['company', 'payments'])
+            ->withCount('adjustments')
             ->when($this->companyFilter, fn ($query) => $query->where('company_id', $this->companyFilter))
             ->when($this->yearFilter, fn ($query) => $query->whereYear('purchase_date', $this->yearFilter))
             ->when($this->monthFilter, fn ($query) => $query->whereMonth('purchase_date', $this->monthFilter));
@@ -350,7 +364,7 @@ new class extends Component
             'purchases' => $purchasesQuery->clone()
                 ->orderByDesc('purchase_date')
                 ->orderByDesc('id')
-                ->simplePaginate(10)
+                ->simplePaginate(20)
                 ->setPath($this->paginationPath)
                 ->appends($this->urlQueryState()),
             // Always the full filtered set's total, not just the current
@@ -360,6 +374,9 @@ new class extends Component
             'monthOptions' => $monthOptions,
             'existingMemoUrl' => $this->existingMemoPath ? Storage::disk('public')->url($this->existingMemoPath) : null,
             'existingMemoIsPdf' => str_ends_with((string) $this->existingMemoPath, '.pdf'),
+            'viewingAdjustments' => $this->viewingAdjustmentsPurchaseId
+                ? CompanyPurchase::with('adjustments.invoice')->find($this->viewingAdjustmentsPurchaseId)
+                : null,
         ];
     }
 }; ?>
@@ -466,7 +483,14 @@ new class extends Component
                         </a>
                     @endif
                 </div>
-                <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $purchase->amount, 2) }}</span>
+                <div class="flex shrink-0 flex-col items-end gap-1">
+                    <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $purchase->amount, 2) }}</span>
+                    @if ($purchase->adjustments_count > 0)
+                        <button type="button" wire:click="viewAdjustments({{ $purchase->id }})" class="whitespace-nowrap text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                            View Bill Adjustments ({{ $purchase->adjustments_count }})
+                        </button>
+                    @endif
+                </div>
             </div>
 
             @can('company_purchases.modify')
@@ -673,6 +697,62 @@ new class extends Component
                 </x-primary-button>
             </div>
         </form>
+    </x-modal>
+
+    <x-modal name="company-purchase-adjustments" focusable maxWidth="lg">
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Bill Adjustments</h2>
+            @if ($viewingAdjustments)
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                    {{ $viewingAdjustments->description }}{{ $viewingAdjustments->bill_number ? ' · Bill #'.$viewingAdjustments->bill_number : '' }}
+                    — invoices this purchase bill has been used to settle, shown as debit/credit.
+                </p>
+
+                <div class="mt-4 flex items-center justify-between rounded-lg bg-emerald-50 px-3 py-2 text-sm dark:bg-emerald-900/20">
+                    <span class="font-medium text-emerald-800 dark:text-emerald-300">Bill Amount <span class="font-normal">(Credit)</span></span>
+                    <span class="font-semibold text-emerald-700 dark:text-emerald-300">+{{ number_format((float) $viewingAdjustments->amount, 2) }}</span>
+                </div>
+
+                <div class="mt-2 max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+                    @forelse ($viewingAdjustments->adjustments as $adjustment)
+                        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-900/50">
+                            <div class="min-w-0">
+                                <p>
+                                    @can('invoices.view')
+                                        <a href="{{ route('invoices.show', $adjustment->invoice_id) }}" class="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                                            Invoice {{ $adjustment->invoice->invoice_number }}
+                                        </a>
+                                    @else
+                                        <span class="font-medium text-slate-700 dark:text-slate-300">Invoice {{ $adjustment->invoice->invoice_number }}</span>
+                                    @endcan
+                                    <span class="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-red-700 dark:bg-red-900/30 dark:text-red-300">Debit</span>
+                                </p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">
+                                    {{ $adjustment->invoice->period_start->format('d M Y') }} – {{ $adjustment->invoice->period_end->format('d M Y') }}
+                                    · Adjusted {{ $adjustment->paid_on->format('d M Y') }}
+                                </p>
+                            </div>
+                            <span class="shrink-0 font-semibold text-red-600 dark:text-red-400">−{{ number_format((float) $adjustment->amount, 2) }}</span>
+                        </div>
+                    @empty
+                        <p class="text-sm text-slate-500 dark:text-slate-400">No adjustments recorded.</p>
+                    @endforelse
+                </div>
+
+                <div class="mt-4 flex items-center justify-between border-t border-slate-200 pt-3 text-sm dark:border-slate-700">
+                    <span class="text-slate-500 dark:text-slate-400">Total Debited (Adjustments)</span>
+                    <span class="font-semibold text-red-600 dark:text-red-400">−{{ number_format((float) $viewingAdjustments->adjustments->sum('amount'), 2) }}</span>
+                </div>
+                <div class="mt-1 flex items-center justify-between text-sm">
+                    <span class="text-slate-500 dark:text-slate-400">Remaining Balance <span class="font-normal">(Credit left on this bill)</span></span>
+                    <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($viewingAdjustments->remainingBalance, 2) }}</span>
+                </div>
+            @endif
+
+            <div class="mt-6 flex justify-end">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Close</x-secondary-button>
+            </div>
+        </div>
     </x-modal>
 
     <x-modal name="confirm-company-purchase-payment-deletion" focusable>

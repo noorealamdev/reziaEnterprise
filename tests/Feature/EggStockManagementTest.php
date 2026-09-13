@@ -24,8 +24,9 @@ test('the stock summary nets purchases minus tiffin consumption minus external s
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-01',
         'quantity' => 1000,
-        'cost_rate' => 11.5,
-        'cost_amount' => 11500,
+        'purchase_rate' => 11.5,
+        'purchase_amount' => 11500,
+        'sale_rate' => 11.5,
     ]);
 
     // Tiffin's own internal use — 300 eggs sent out (headcount + buffer).
@@ -54,7 +55,6 @@ test('the stock summary nets purchases minus tiffin consumption minus external s
         'quantity' => 150,
         'sale_rate' => 14,
         'sale_amount' => 2100,
-        'buyer_name' => 'Local Market',
     ]);
 
     EggWaste::create([
@@ -76,6 +76,56 @@ test('the stock summary nets purchases minus tiffin consumption minus external s
     expect($component->viewData('eggTotalRevenue'))->toBe(2100.0);
 });
 
+test('egg profit counts both Tiffin\'s internal use and external sales against the real purchase cost', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+    $egg = TiffinItem::create(['name' => 'Egg']);
+
+    // 1000 bought at 10 each = 10,000 spent, locked to sell internally at 12.
+    TiffinItemPurchase::create([
+        'tiffin_item_id' => $egg->id,
+        'purchase_date' => '2026-09-01',
+        'quantity' => 1000,
+        'purchase_rate' => 10,
+        'purchase_amount' => 10000,
+        'sale_rate' => 12,
+    ]);
+
+    // Tiffin "pays" 300 * 12 = 3,600 — this is revenue to the egg business,
+    // not a cost, even though it never leaves the company's bank account.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => '2026-09-02',
+        'supply_type' => 'Egg',
+        'quantity' => 300,
+        'cost_rate' => 12,
+        'cost_amount' => 3600,
+    ]);
+
+    // An outside buyer pays 150 * 14 = 2,100 — a completely different rate
+    // than Tiffin's, and must still count toward total profit.
+    EggSale::create([
+        'sale_date' => '2026-09-03',
+        'quantity' => 150,
+        'sale_rate' => 14,
+        'sale_amount' => 2100,
+    ]);
+
+    // 550 eggs are still unsold/unused (in stock or wasted) — their cost is
+    // already inside purchase_amount but they've earned nothing back yet,
+    // so this period's profit legitimately comes out negative.
+    EggWaste::create(['waste_date' => '2026-09-04', 'quantity' => 20]);
+
+    $this->actingAs($user);
+
+    // 3,600 (Tiffin) + 2,100 (external) - 10,000 (purchase cost) = -4,300.
+    expect(Volt::test('egg-purchases.purchase-manager')->viewData('eggProfitTotal'))->toBe(-4300.0);
+});
+
 test('saving a new Tiffin batch entry immediately reduces In Stock Now on the Egg Purchases page', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -90,8 +140,9 @@ test('saving a new Tiffin batch entry immediately reduces In Stock Now on the Eg
         'tiffin_item_id' => $egg->id,
         'purchase_date' => now()->toDateString(),
         'quantity' => 1000,
-        'cost_rate' => 11.5,
-        'cost_amount' => 11500,
+        'purchase_rate' => 11.5,
+        'purchase_amount' => 11500,
+        'sale_rate' => 11.5,
     ]);
 
     $this->actingAs($user);
@@ -118,303 +169,15 @@ test('saving a new Tiffin batch entry immediately reduces In Stock Now on the Eg
     expect(Volt::test('egg-purchases.purchase-manager')->viewData('eggInStock'))->toBe(795.0);
 });
 
-test('a sale remarks is shown on its row in the sales list', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('sale_remarks', 'Buyer picked up in person')
-        ->call('saveSale')
-        ->assertHasNoErrors()
-        ->assertSee('Buyer picked up in person');
-});
-
-test('a sale defaults to cash and can be recorded as due instead', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->call('startCreateSale')
-        ->assertSet('payment_status', 'cash')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('payment_status', 'due')
-        ->call('saveSale')
-        ->assertHasNoErrors();
-
-    $this->assertDatabaseHas('egg_sales', [
-        'quantity' => 200,
-        'payment_status' => 'due',
-    ]);
-});
-
-test('marking a due sale as paid updates its status', function () {
-    $user = User::factory()->create();
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-02',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-        'payment_status' => 'due',
-    ]);
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('markSalePaid', $sale->id)
-        ->assertHasNoErrors();
-
-    expect($sale->fresh()->payment_status)->toBe('paid');
-});
-
-test('a sale in-charge is shown on its row and can be searched', function () {
-    $user = User::factory()->create();
-    EggSale::create([
-        'sale_date' => '2026-09-05',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-        'in_charge' => 'Mr. Karim',
-    ]);
-    EggSale::create([
-        'sale_date' => '2026-09-06',
-        'quantity' => 100,
-        'sale_rate' => 14,
-        'sale_amount' => 1400,
-        'in_charge' => 'Mr. Rahim',
-    ]);
-
-    $this->actingAs($user);
-
-    $component = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->assertSee('Mr. Karim')
-        ->assertSee('Mr. Rahim')
-        ->set('saleInChargeFilter', 'Karim');
-
-    expect($component->viewData('sales'))->toHaveCount(1);
-    $component->assertSee('Mr. Karim')->assertDontSee('Mr. Rahim');
-});
-
-test('recording a sale persists with a computed sale amount and reduces stock on hand', function () {
-    $user = User::factory()->create();
-    $egg = TiffinItem::create(['name' => 'Egg']);
-    TiffinItemPurchase::create([
-        'tiffin_item_id' => $egg->id,
-        'purchase_date' => '2026-09-01',
-        'quantity' => 1000,
-        'cost_rate' => 11.5,
-        'cost_amount' => 11500,
-    ]);
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('buyer_name', 'Local Market')
-        ->call('saveSale')
-        ->assertHasNoErrors();
-
-    $this->assertDatabaseHas('egg_sales', [
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-        'buyer_name' => 'Local Market',
-    ]);
-
-    $component = Volt::test('egg-purchases.purchase-manager');
-    // 1000 purchased - 0 consumed - 200 sold = 800.
-    expect($component->viewData('eggInStock'))->toBe(800.0);
-});
-
-test('editing a sale updates it', function () {
-    $user = User::factory()->create();
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-02',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-    ]);
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('startEditSale', $sale->id)
-        ->set('sale_quantity', '250')
-        ->set('sale_rate', '15')
-        ->call('saveSale')
-        ->assertHasNoErrors();
-
-    expect((float) $sale->fresh()->quantity)->toBe(250.0);
-    expect((float) $sale->fresh()->sale_rate)->toBe(15.0);
-    expect((float) $sale->fresh()->sale_amount)->toBe(3750.0);
-});
-
-test('deleting a sale removes it', function () {
-    $user = User::factory()->create();
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-02',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-    ]);
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('confirmDeleteSale', $sale->id)
-        ->call('deleteSale');
-
-    $this->assertDatabaseMissing('egg_sales', ['id' => $sale->id]);
-});
-
-test('quantity and sale rate are required to record a sale', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->call('saveSale')
-        ->assertHasErrors(['sale_quantity', 'sale_rate']);
-});
-
-test('year and month filters narrow the listed sales', function () {
-    $user = User::factory()->create();
-
-    EggSale::create(['sale_date' => '2025-08-10', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400]);
-    EggSale::create(['sale_date' => '2026-03-05', 'quantity' => 120, 'sale_rate' => 14, 'sale_amount' => 1680]);
-
-    $this->actingAs($user);
-
-    $byYear = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->set('saleYearFilter', '2025');
-    expect($byYear->viewData('sales'))->toHaveCount(1);
-
-    $byMonth = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '3');
-    expect($byMonth->viewData('sales'))->toHaveCount(1);
-
-    $wrongMonth = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '4');
-    expect($wrongMonth->viewData('sales'))->toHaveCount(0);
-});
-
-test('changing the sale year clears an incompatible month selection', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '3')
-        ->set('saleYearFilter', '2025')
-        ->assertSet('saleMonthFilter', '');
-});
-
-test('the sale quick range filter only counts sales within that window', function () {
-    $user = User::factory()->create();
-
-    EggSale::create(['sale_date' => now()->subDays(3)->toDateString(), 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400]);
-    EggSale::create(['sale_date' => now()->subDays(20)->toDateString(), 'quantity' => 200, 'sale_rate' => 14, 'sale_amount' => 2800]);
-    EggSale::create(['sale_date' => now()->subDays(25)->toDateString(), 'quantity' => 150, 'sale_rate' => 14, 'sale_amount' => 2100]);
-
-    $this->actingAs($user);
-
-    $byWeek = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->set('saleRangeFilter', '7');
-    expect($byWeek->viewData('sales'))->toHaveCount(1);
-
-    $byFifteenDays = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->set('saleRangeFilter', '15');
-    expect($byFifteenDays->viewData('sales'))->toHaveCount(1);
-
-    $byThirtyDays = Volt::test('egg-purchases.purchase-manager')
-        ->call('switchView', 'sales')
-        ->set('saleRangeFilter', '30');
-    expect($byThirtyDays->viewData('sales'))->toHaveCount(3);
-});
-
-test('choosing a sale range clears the year and month, and vice versa', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '3')
-        ->set('saleRangeFilter', '7')
-        ->assertSet('saleYearFilter', '')
-        ->assertSet('saleMonthFilter', '')
-        ->set('saleYearFilter', '2025')
-        ->assertSet('saleRangeFilter', '');
-});
-
-test('a user without egg sales permission cannot see the sales tab or stock summary', function () {
+test('a user without egg sales permission cannot see the Sold Externally figure or the Egg Sales link', function () {
     $staff = User::factory()->staff()->create();
     RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::EggPurchasesView->value]);
 
     $this->actingAs($staff);
 
     Volt::test('egg-purchases.purchase-manager')
-        ->assertDontSee('Sales')
-        ->assertDontSee('Sold Externally');
-});
-
-test('an accountant can record a sale but gets a 403 trying to edit or delete one', function () {
-    $accountant = User::factory()->accountant()->create();
-    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggSalesCreate->value]);
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-01',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-    ]);
-
-    $this->actingAs($accountant);
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '100')
-        ->set('sale_rate', '14')
-        ->call('saveSale')
-        ->assertHasNoErrors();
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('startEditSale', $sale->id)
-        ->set('sale_quantity', '999')
-        ->call('saveSale')
-        ->assertForbidden();
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('confirmDeleteSale', $sale->id)
-        ->call('deleteSale')
-        ->assertForbidden();
-
-    Volt::test('egg-purchases.purchase-manager')
-        ->call('markSalePaid', $sale->id)
-        ->assertForbidden();
+        ->assertDontSee('Sold Externally')
+        ->assertDontSee('Egg Sales');
 });
 
 test('recording waste persists it and reduces stock on hand', function () {
@@ -424,8 +187,9 @@ test('recording waste persists it and reduces stock on hand', function () {
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-09-01',
         'quantity' => 1000,
-        'cost_rate' => 11.5,
-        'cost_amount' => 11500,
+        'purchase_rate' => 11.5,
+        'purchase_amount' => 11500,
+        'sale_rate' => 11.5,
     ]);
 
     $this->actingAs($user);

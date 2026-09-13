@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\EggBuyer;
 use App\Models\EggSale;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
@@ -48,13 +49,18 @@ class EggStockSeeder extends Seeder
 
         foreach ($purchases as $purchase) {
             $date = $today->copy()->subDays($purchase['daysAgo'])->toDateString();
+            // Tiffin's internal cost for Egg is locked to this, deliberately
+            // a small markup over what the egg business actually paid — the
+            // gap is the egg business's own profit margin.
+            $saleRate = round($purchase['costRate'] + 1.00, 2);
 
             TiffinItemPurchase::updateOrCreate(
                 ['tiffin_item_id' => $egg->id, 'purchase_date' => $date],
                 [
                     'quantity' => $purchase['quantity'],
-                    'cost_rate' => $purchase['costRate'],
-                    'cost_amount' => round($purchase['quantity'] * $purchase['costRate'], 2),
+                    'purchase_rate' => $purchase['costRate'],
+                    'purchase_amount' => round($purchase['quantity'] * $purchase['costRate'], 2),
+                    'sale_rate' => $saleRate,
                     'supplier_name' => $purchase['supplier'],
                 ]
             );
@@ -73,9 +79,10 @@ class EggStockSeeder extends Seeder
 
         foreach ($sales as $sale) {
             $date = $today->copy()->subDays($sale['daysAgo'])->toDateString();
+            $buyer = EggBuyer::firstOrCreate(['name' => $sale['buyer']]);
 
             EggSale::updateOrCreate(
-                ['sale_date' => $date, 'buyer_name' => $sale['buyer']],
+                ['sale_date' => $date, 'egg_buyer_id' => $buyer->id],
                 [
                     'quantity' => $sale['quantity'],
                     'sale_rate' => $sale['saleRate'],

@@ -21,11 +21,9 @@ new class extends Component
     use WithFileUploads;
     use WithPagination;
 
-    private const SUPPLY_PER_PAGE = 15;
+    private const SUPPLY_PER_PAGE = 30;
 
-    private const SALES_PER_PAGE = 10;
-
-    private const WASTE_PER_PAGE = 10;
+    private const WASTE_PER_PAGE = 20;
 
     #[Url(as: 'view', history: true)]
     public string $activeView = 'purchases';
@@ -56,19 +54,6 @@ new class extends Component
     #[Url(as: 'range', history: true)]
     public string $rangeFilter = '';
 
-    #[Url(as: 'sale_year', history: true)]
-    public string $saleYearFilter = '';
-
-    #[Url(as: 'sale_month', history: true)]
-    public string $saleMonthFilter = '';
-
-    /** Quick range: '' (use Year/Month), '7' (last 7 days) or '15' (last 15 days). */
-    #[Url(as: 'sale_range', history: true)]
-    public string $saleRangeFilter = '';
-
-    #[Url(as: 'sale_in_charge', history: true)]
-    public string $saleInChargeFilter = '';
-
     #[Url(as: 'waste_year', history: true)]
     public string $wasteYearFilter = '';
 
@@ -87,7 +72,9 @@ new class extends Component
 
     public ?string $quantity = null;
 
-    public ?string $cost_rate = null;
+    public ?string $purchase_rate = null;
+
+    public ?string $sale_rate = null;
 
     public ?string $supplier_name = null;
 
@@ -105,24 +92,6 @@ new class extends Component
 
     /** Set when the accountant removes an existing memo without replacing it. */
     public bool $removeMemo = false;
-
-    public ?int $editingSaleId = null;
-
-    public string $sale_date = '';
-
-    public ?string $sale_quantity = null;
-
-    public ?string $sale_rate = null;
-
-    public ?string $buyer_name = null;
-
-    public string $payment_status = 'cash';
-
-    public ?string $in_charge = null;
-
-    public ?string $sale_remarks = null;
-
-    public ?int $confirmingDeleteSaleId = null;
 
     public ?int $editingWasteId = null;
 
@@ -206,33 +175,6 @@ new class extends Component
         $this->resetPage('supplyPage');
     }
 
-    public function updatingSaleYearFilter(): void
-    {
-        // A month only makes sense within a chosen year — clear it if the
-        // year changes so the two never disagree. The quick range filter is
-        // a separate, mutually exclusive way to scope the same report.
-        $this->saleMonthFilter = '';
-        $this->saleRangeFilter = '';
-        $this->resetPage('salesPage');
-    }
-
-    public function updatingSaleMonthFilter(): void
-    {
-        $this->resetPage('salesPage');
-    }
-
-    public function updatingSaleRangeFilter(): void
-    {
-        $this->saleYearFilter = '';
-        $this->saleMonthFilter = '';
-        $this->resetPage('salesPage');
-    }
-
-    public function updatingSaleInChargeFilter(): void
-    {
-        $this->resetPage('salesPage');
-    }
-
     public function updatingWasteYearFilter(): void
     {
         $this->wasteMonthFilter = '';
@@ -273,10 +215,6 @@ new class extends Component
             'year' => $this->yearFilter,
             'month' => $this->monthFilter,
             'range' => $this->rangeFilter,
-            'sale_year' => $this->saleYearFilter,
-            'sale_month' => $this->saleMonthFilter,
-            'sale_range' => $this->saleRangeFilter,
-            'sale_in_charge' => $this->saleInChargeFilter,
             'waste_year' => $this->wasteYearFilter,
             'waste_month' => $this->wasteMonthFilter,
             'waste_range' => $this->wasteRangeFilter,
@@ -289,7 +227,8 @@ new class extends Component
         $this->tiffin_item_id = TiffinItem::where('name', 'Egg')->value('id');
         $this->purchase_date = now()->toDateString();
         $this->quantity = null;
-        $this->cost_rate = null;
+        $this->purchase_rate = null;
+        $this->sale_rate = null;
         $this->supplier_name = null;
         $this->remarks = null;
         $this->existingMemoPath = null;
@@ -312,7 +251,8 @@ new class extends Component
         $this->tiffin_item_id = $purchase->tiffin_item_id;
         $this->purchase_date = $purchase->purchase_date->format('Y-m-d');
         $this->quantity = (string) $purchase->quantity;
-        $this->cost_rate = (string) $purchase->cost_rate;
+        $this->purchase_rate = (string) $purchase->purchase_rate;
+        $this->sale_rate = (string) $purchase->sale_rate;
         $this->supplier_name = $purchase->supplier_name;
         $this->remarks = $purchase->remarks;
         $this->existingMemoPath = $purchase->memo_path;
@@ -364,7 +304,8 @@ new class extends Component
 
         $this->editingId = $existing->id;
         $this->quantity = (string) $existing->quantity;
-        $this->cost_rate = (string) $existing->cost_rate;
+        $this->purchase_rate = (string) $existing->purchase_rate;
+        $this->sale_rate = (string) $existing->sale_rate;
         $this->supplier_name = $existing->supplier_name;
         $this->remarks = $existing->remarks;
         $this->existingMemoPath = $existing->memo_path;
@@ -387,7 +328,8 @@ new class extends Component
                     ->ignore($this->editingId),
             ],
             'quantity' => ['required', 'numeric', 'min:0.01'],
-            'cost_rate' => ['required', 'numeric', 'min:0'],
+            'purchase_rate' => ['required', 'numeric', 'min:0'],
+            'sale_rate' => ['required', 'numeric', 'min:0'],
             'supplier_name' => ['nullable', 'string', 'max:255'],
             'memoFile' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
             'remarks' => ['nullable', 'string', 'max:2000'],
@@ -395,7 +337,7 @@ new class extends Component
 
         $validated['supplier_name'] = $validated['supplier_name'] ? trim($validated['supplier_name']) : null;
         $validated['remarks'] = $validated['remarks'] ? trim($validated['remarks']) : null;
-        $validated['cost_amount'] = round((float) $validated['quantity'] * (float) $validated['cost_rate'], 2);
+        $validated['purchase_amount'] = round((float) $validated['quantity'] * (float) $validated['purchase_rate'], 2);
 
         $existingPurchase = $this->editingId ? TiffinItemPurchase::find($this->editingId) : null;
 
@@ -449,106 +391,6 @@ new class extends Component
         $this->confirmingDeleteId = null;
         $this->dispatch('close-modal', 'confirm-egg-purchase-deletion');
         session()->flash('status', 'Purchase deleted.');
-    }
-
-    public function startCreateSale(): void
-    {
-        $this->editingSaleId = null;
-        $this->sale_date = now()->toDateString();
-        $this->sale_quantity = null;
-        $this->sale_rate = null;
-        $this->buyer_name = null;
-        $this->payment_status = 'cash';
-        $this->in_charge = null;
-        $this->sale_remarks = null;
-        $this->resetErrorBag();
-        $this->dispatch('open-modal', 'egg-sale-form');
-    }
-
-    public function startEditSale(int $saleId): void
-    {
-        $sale = EggSale::findOrFail($saleId);
-        $this->editingSaleId = $sale->id;
-        $this->sale_date = $sale->sale_date->format('Y-m-d');
-        $this->sale_quantity = (string) $sale->quantity;
-        $this->sale_rate = (string) $sale->sale_rate;
-        $this->buyer_name = $sale->buyer_name;
-        // Editing only ever offers Cash/Due — "Paid" is reached exclusively
-        // through markSalePaid() below, never typed in directly, so a
-        // previously-paid sale still shows as Due here rather than
-        // silently defaulting back to Cash.
-        $this->payment_status = $sale->payment_status === 'paid' ? 'due' : $sale->payment_status;
-        $this->in_charge = $sale->in_charge;
-        $this->sale_remarks = $sale->remarks;
-        $this->resetErrorBag();
-        $this->dispatch('open-modal', 'egg-sale-form');
-    }
-
-    public function saveSale(): void
-    {
-        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
-
-        $validated = $this->validate([
-            'sale_date' => ['required', 'date'],
-            'sale_quantity' => ['required', 'numeric', 'min:0.01'],
-            'sale_rate' => ['required', 'numeric', 'min:0'],
-            'buyer_name' => ['nullable', 'string', 'max:255'],
-            'payment_status' => ['required', Rule::in(['cash', 'due'])],
-            'in_charge' => ['nullable', 'string', 'max:255'],
-            'sale_remarks' => ['nullable', 'string', 'max:2000'],
-        ], [], [
-            'sale_quantity' => 'quantity',
-            'sale_rate' => 'sale rate',
-        ]);
-
-        $attributes = [
-            'sale_date' => $validated['sale_date'],
-            'quantity' => $validated['sale_quantity'],
-            'sale_rate' => $validated['sale_rate'],
-            'sale_amount' => round((float) $validated['sale_quantity'] * (float) $validated['sale_rate'], 2),
-            'buyer_name' => $validated['buyer_name'] ? trim($validated['buyer_name']) : null,
-            'payment_status' => $validated['payment_status'],
-            'in_charge' => $validated['in_charge'] ? trim($validated['in_charge']) : null,
-            'remarks' => $validated['sale_remarks'] ? trim($validated['sale_remarks']) : null,
-        ];
-
-        if ($this->editingSaleId) {
-            EggSale::whereKey($this->editingSaleId)->update($attributes);
-        } else {
-            $attributes['created_by'] = auth()->id();
-            EggSale::create($attributes);
-        }
-
-        $this->dispatch('close-modal', 'egg-sale-form');
-        session()->flash('status', $this->editingSaleId ? 'Sale updated.' : 'Sale recorded.');
-    }
-
-    public function markSalePaid(int $saleId): void
-    {
-        Gate::authorize('egg_sales.modify');
-
-        EggSale::whereKey($saleId)->where('payment_status', 'due')->update(['payment_status' => 'paid']);
-
-        session()->flash('status', 'Sale marked as paid.');
-    }
-
-    public function confirmDeleteSale(int $saleId): void
-    {
-        $this->confirmingDeleteSaleId = $saleId;
-        $this->dispatch('open-modal', 'confirm-egg-sale-deletion');
-    }
-
-    public function deleteSale(): void
-    {
-        Gate::authorize('egg_sales.modify');
-
-        if ($this->confirmingDeleteSaleId) {
-            EggSale::destroy($this->confirmingDeleteSaleId);
-        }
-
-        $this->confirmingDeleteSaleId = null;
-        $this->dispatch('close-modal', 'confirm-egg-sale-deletion');
-        session()->flash('status', 'Sale deleted.');
     }
 
     public function startCreateWaste(): void
@@ -643,19 +485,24 @@ new class extends Component
                 ->when($this->monthFilter, fn ($query) => $query->whereMonth('purchase_date', $this->monthFilter))
                 ->orderByDesc('purchase_date')
                 ->orderByDesc('id')
-                ->simplePaginate(10)
+                ->simplePaginate(20)
                 ->setPath($this->paginationPath)
                 ->appends($this->urlQueryState()),
             'availableYears' => $availableYears,
             'monthOptions' => $monthOptions,
-            'costAmountPreview' => (is_numeric($this->quantity) && is_numeric($this->cost_rate))
-                ? round((float) $this->quantity * (float) $this->cost_rate, 2)
+            'purchaseAmountPreview' => (is_numeric($this->quantity) && is_numeric($this->purchase_rate))
+                ? round((float) $this->quantity * (float) $this->purchase_rate, 2)
+                : null,
+            'saleAmountPreview' => (is_numeric($this->quantity) && is_numeric($this->sale_rate))
+                ? round((float) $this->quantity * (float) $this->sale_rate, 2)
+                : null,
+            'profitPreview' => (is_numeric($this->quantity) && is_numeric($this->purchase_rate) && is_numeric($this->sale_rate))
+                ? round((float) $this->quantity * ((float) $this->sale_rate - (float) $this->purchase_rate), 2)
                 : null,
             'existingMemoUrl' => $this->existingMemoPath ? Storage::disk('public')->url($this->existingMemoPath) : null,
             'existingMemoIsPdf' => str_ends_with((string) $this->existingMemoPath, '.pdf'),
             ...$this->supplyReport(),
             ...$this->stockSummary(),
-            ...$this->salesReport($monthOptions),
             ...$this->wasteReport($monthOptions),
         ];
     }
@@ -668,7 +515,7 @@ new class extends Component
      * outside buyer, minus everything explicitly logged as wasted
      * (broken/spoiled beyond that fixed per-day buffer).
      *
-     * @return array{eggTotalPurchased: float, eggTotalConsumed: float, eggTotalSold: float, eggTotalWasted: float, eggInStock: float, eggTotalRevenue: float}
+     * @return array{eggTotalPurchased: float, eggTotalConsumed: float, eggTotalSold: float, eggTotalWasted: float, eggInStock: float, eggTotalRevenue: float, eggProfitTotal: float}
      */
     private function stockSummary(): array
     {
@@ -685,6 +532,21 @@ new class extends Component
         $totalSold = (float) EggSale::sum('quantity');
         $totalWasted = (float) EggWaste::sum('quantity');
 
+        // The whole egg business's own P&L, across every destination eggs
+        // actually went to — not just one purchase's implied margin. Money
+        // in: what Tiffin was internally "charged" for every Egg job entry
+        // (quantity × the purchase's locked sale_rate, already summed into
+        // cost_amount) plus every external buyer's sale_amount. Money out:
+        // every purchase's real cost, full stop — wasted eggs were still
+        // paid for and never earned anything back, so they fall out of this
+        // naturally rather than needing their own line item.
+        $tiffinRevenue = (float) JobEntry::whereNotNull('tiffin_department_id')
+            ->where('supply_type', 'Egg')
+            ->sum('cost_amount');
+        $externalRevenue = (float) EggSale::sum('sale_amount');
+        $totalPurchaseCost = (float) TiffinItemPurchase::sum('purchase_amount');
+        $eggProfitTotal = $tiffinRevenue + $externalRevenue - $totalPurchaseCost;
+
         return [
             'eggTotalPurchased' => $totalPurchased,
             'eggTotalConsumed' => $totalConsumed,
@@ -692,38 +554,7 @@ new class extends Component
             'eggTotalWasted' => $totalWasted,
             'eggInStock' => $totalPurchased - $totalConsumed - $totalSold - $totalWasted,
             'eggTotalRevenue' => (float) EggSale::sum('sale_amount'),
-        ];
-    }
-
-    /**
-     * @param  Collection<int, string>  $monthOptions
-     * @return array{sales: LengthAwarePaginator, saleAvailableYears: Collection<int, int>, saleMonthOptions: Collection<int, string>, saleAmountPreview: ?float}
-     */
-    private function salesReport(Collection $monthOptions): array
-    {
-        $saleAvailableYears = EggSale::pluck('sale_date')
-            ->map(fn ($date) => $date->year)
-            ->unique()
-            ->sortDesc()
-            ->values();
-
-        $sales = EggSale::when($this->saleRangeFilter, fn ($query) => $query->whereDate('sale_date', '>=', now()->subDays((int) $this->saleRangeFilter - 1)->startOfDay()->toDateString()))
-            ->when($this->saleYearFilter, fn ($query) => $query->whereYear('sale_date', $this->saleYearFilter))
-            ->when($this->saleMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->saleMonthFilter))
-            ->when($this->saleInChargeFilter, fn ($query) => $query->where('in_charge', 'like', '%'.$this->saleInChargeFilter.'%'))
-            ->orderByDesc('sale_date')
-            ->orderByDesc('id')
-            ->simplePaginate(self::SALES_PER_PAGE, ['*'], 'salesPage')
-            ->setPath($this->paginationPath)
-            ->appends($this->urlQueryState());
-
-        return [
-            'sales' => $sales,
-            'saleAvailableYears' => $saleAvailableYears,
-            'saleMonthOptions' => $monthOptions,
-            'saleAmountPreview' => (is_numeric($this->sale_quantity) && is_numeric($this->sale_rate))
-                ? round((float) $this->sale_quantity * (float) $this->sale_rate, 2)
-                : null,
+            'eggProfitTotal' => round($eggProfitTotal, 2),
         ];
     }
 
@@ -825,51 +656,55 @@ new class extends Component
 <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="text-base font-semibold text-slate-900 dark:text-white">Egg Purchase & Stock Management</h2>
-        @can('egg_purchases.create')
-            @if ($activeView === 'purchases')
-                <x-primary-button type="button" wire:click="startCreate">
-                    + Record Purchase
-                </x-primary-button>
-            @endif
-        @endcan
-        @can('egg_sales.create')
-            @if ($activeView === 'sales')
-                <x-primary-button type="button" wire:click="startCreateSale">
-                    + Record Sale
-                </x-primary-button>
-            @endif
-        @endcan
-        @can('egg_purchases.create')
-            @if ($activeView === 'waste')
-                <x-primary-button type="button" wire:click="startCreateWaste">
-                    + Record Waste
-                </x-primary-button>
-            @endif
-        @endcan
+        <div class="flex flex-wrap items-center gap-3">
+            @can('egg_purchases.create')
+                @if ($activeView === 'purchases')
+                    <x-primary-button type="button" wire:click="startCreate">
+                        + Record Purchase
+                    </x-primary-button>
+                @endif
+                @if ($activeView === 'waste')
+                    <x-primary-button type="button" wire:click="startCreateWaste">
+                        + Record Waste
+                    </x-primary-button>
+                @endif
+            @endcan
+            @can('egg_sales.view')
+                <a href="{{ route('egg-sales.index') }}" wire:navigate class="text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                    Egg Sales &rarr;
+                </a>
+            @endcan
+        </div>
     </div>
 
     @can('egg_sales.view')
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Purchased</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalPurchased, 2), '0'), '.') }}</p>
+        <div class="grid grid-cols-3 gap-2 sm:gap-3 sm:grid-cols-6">
+            <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 dark:border-slate-800 dark:bg-slate-800">
+                <p class="text-[11px] text-slate-500 sm:text-xs dark:text-slate-400">Purchased</p>
+                <p class="mt-1 text-base font-semibold text-slate-900 sm:text-lg dark:text-white">{{ rtrim(rtrim(number_format($eggTotalPurchased, 2), '0'), '.') }}</p>
             </div>
-            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Used by Tiffin</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalConsumed, 2), '0'), '.') }}</p>
+            <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 dark:border-slate-800 dark:bg-slate-800">
+                <p class="text-[11px] text-slate-500 sm:text-xs dark:text-slate-400">Used by Tiffin</p>
+                <p class="mt-1 text-base font-semibold text-slate-900 sm:text-lg dark:text-white">{{ rtrim(rtrim(number_format($eggTotalConsumed, 2), '0'), '.') }}</p>
             </div>
-            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Sold Externally</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalSold, 2), '0'), '.') }}</p>
+            <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 dark:border-slate-800 dark:bg-slate-800">
+                <p class="text-[11px] text-slate-500 sm:text-xs dark:text-slate-400">Sold Externally</p>
+                <p class="mt-1 text-base font-semibold text-slate-900 sm:text-lg dark:text-white">{{ rtrim(rtrim(number_format($eggTotalSold, 2), '0'), '.') }}</p>
             </div>
-            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <p class="text-xs text-slate-500 dark:text-slate-400">Wasted</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($eggTotalWasted, 2), '0'), '.') }}</p>
+            <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4 dark:border-slate-800 dark:bg-slate-800">
+                <p class="text-[11px] text-slate-500 sm:text-xs dark:text-slate-400">Wasted</p>
+                <p class="mt-1 text-base font-semibold text-slate-900 sm:text-lg dark:text-white">{{ rtrim(rtrim(number_format($eggTotalWasted, 2), '0'), '.') }}</p>
             </div>
-            <div class="rounded-xl border border-brand-200 bg-brand-50 p-4 shadow-sm dark:border-brand-800 dark:bg-brand-900/20">
-                <p class="text-xs text-brand-700 dark:text-brand-300">In Stock Now</p>
-                <p class="mt-1 text-lg font-semibold text-brand-900 dark:text-white">{{ rtrim(rtrim(number_format($eggInStock, 2), '0'), '.') }}</p>
+            <div class="rounded-xl border border-brand-200 bg-brand-50 p-3 shadow-sm sm:p-4 dark:border-brand-800 dark:bg-brand-900/20">
+                <p class="text-[11px] text-brand-700 sm:text-xs dark:text-brand-300">In Stock Now</p>
+                <p class="mt-1 text-base font-semibold text-brand-900 sm:text-lg dark:text-white">{{ rtrim(rtrim(number_format($eggInStock, 2), '0'), '.') }}</p>
             </div>
+            @can('dashboard.view_profit')
+                <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 shadow-sm sm:p-4 dark:border-emerald-800 dark:bg-emerald-900/20">
+                    <p class="text-[11px] text-emerald-700 sm:text-xs dark:text-emerald-300">Egg Business Profit</p>
+                    <p class="mt-1 text-base font-semibold text-emerald-900 sm:text-lg dark:text-white">{{ number_format($eggProfitTotal, 2) }}</p>
+                </div>
+            @endcan
         </div>
     @endcan
 
@@ -890,16 +725,6 @@ new class extends Component
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M3.5 12h17M3.5 12l4-4M3.5 12l4 4M20.5 12l-4-4M20.5 12l-4 4" /></svg>
             Supply by Item
         </button>
-        @can('egg_sales.view')
-            <button
-                type="button"
-                wire:click="switchView('sales')"
-                class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'sales' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
-            >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19V5m5 14V9m5 10V13m5 6V7" /></svg>
-                Sales
-            </button>
-        @endcan
         <button
             type="button"
             wire:click="switchView('waste')"
@@ -961,7 +786,8 @@ new class extends Component
                         </div>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                             Qty {{ rtrim(rtrim(number_format((float) $purchase->quantity, 2), '0'), '.') }}
-                            · Rate {{ number_format((float) $purchase->cost_rate, 2) }}
+                            · Purchase Rate {{ number_format((float) $purchase->purchase_rate, 2) }}
+                            · Sale Rate {{ number_format((float) $purchase->sale_rate, 2) }}
                             @if ($purchase->supplier_name)
                                 · {{ $purchase->supplier_name }}
                             @endif
@@ -976,7 +802,7 @@ new class extends Component
                             </a>
                         @endif
                     </div>
-                    <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $purchase->cost_amount, 2) }}</span>
+                    <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $purchase->purchase_amount, 2) }}</span>
                 </div>
 
                 @can('egg_purchases.modify')
@@ -1075,95 +901,6 @@ new class extends Component
 
             {{ $supplyDays->links('pagination::simple-tailwind') }}
         @endif
-    @elseif ($activeView === 'sales')
-        <p class="text-xs text-slate-500 dark:text-slate-400">
-            Eggs sold to an outside buyer, separate from Tiffin's own internal supply — each sale reduces
-            the "In Stock Now" figure above just like Tiffin's daily use does.
-        </p>
-
-        <div class="flex flex-wrap items-center gap-3">
-            <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
-                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
-                    <button
-                        type="button"
-                        wire:click="$set('saleRangeFilter', '{{ $value }}')"
-                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $saleRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
-                    >
-                        {{ $label }}
-                    </button>
-                @endforeach
-            </div>
-
-            <x-select-input wire:model.live="saleYearFilter" class="w-full sm:w-32">
-                <option value="">Every year</option>
-                @foreach ($saleAvailableYears as $year)
-                    <option value="{{ $year }}">{{ $year }}</option>
-                @endforeach
-            </x-select-input>
-
-            <x-select-input wire:model.live="saleMonthFilter" class="w-full sm:w-40" :disabled="! $saleYearFilter">
-                <option value="">{{ $saleYearFilter ? 'Every month' : 'Pick a year first' }}</option>
-                @foreach ($saleMonthOptions as $value => $label)
-                    <option value="{{ $value }}">{{ $label }}</option>
-                @endforeach
-            </x-select-input>
-
-            <x-text-input wire:model.live.debounce.400ms="saleInChargeFilter" placeholder="Search by In-Charge" class="w-full sm:w-48" />
-        </div>
-
-        @forelse ($sales as $sale)
-            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div class="min-w-0">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <h3 class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ $sale->buyer_name ?: 'Egg Sale' }}</h3>
-                            <span class="text-xs text-slate-400 dark:text-slate-500">{{ $sale->sale_date->format('d M Y') }}</span>
-                            @if ($sale->payment_status === 'due')
-                                <x-badge color="amber">Due</x-badge>
-                            @elseif ($sale->payment_status === 'paid')
-                                <x-badge color="green">Paid</x-badge>
-                            @else
-                                <x-badge color="slate">Cash</x-badge>
-                            @endif
-                        </div>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Qty {{ rtrim(rtrim(number_format((float) $sale->quantity, 2), '0'), '.') }}
-                            · Rate {{ number_format((float) $sale->sale_rate, 2) }}
-                            @if ($sale->in_charge)
-                                · In-Charge: {{ $sale->in_charge }}
-                            @endif
-                        </p>
-                        @if ($sale->remarks)
-                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $sale->remarks }}</p>
-                        @endif
-                    </div>
-                    <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $sale->sale_amount, 2) }}</span>
-                </div>
-
-                @can('egg_sales.modify')
-                    <div class="mt-4 flex items-center gap-3">
-                        <x-secondary-button type="button" wire:click="startEditSale({{ $sale->id }})">
-                            Edit
-                        </x-secondary-button>
-                        @if ($sale->payment_status === 'due')
-                            <x-secondary-button type="button" wire:click="markSalePaid({{ $sale->id }})">
-                                Mark Paid
-                            </x-secondary-button>
-                        @endif
-                        <x-danger-button type="button" wire:click="confirmDeleteSale({{ $sale->id }})">
-                            Delete
-                        </x-danger-button>
-                    </div>
-                @endcan
-            </div>
-        @empty
-            <x-empty-state
-                :title="$saleAvailableYears->isNotEmpty() ? 'No sales match these filters' : 'No Egg sales recorded yet'"
-                :message="$saleAvailableYears->isNotEmpty() ? 'Try a different year or month — or clear the filters above.' : 'Record a sale whenever eggs are sold to an outside buyer.'"
-            />
-        @endforelse
-
-        {{ $sales->links('pagination::simple-tailwind') }}
     @elseif ($activeView === 'waste')
         <p class="text-xs text-slate-500 dark:text-slate-400">
             Eggs broken or spoiled and thrown out — beyond the fixed daily buffer already built into Tiffin's
@@ -1270,13 +1007,31 @@ new class extends Component
             </div>
 
             <div>
-                <x-input-label for="purchase_cost_rate" value="Cost Rate" />
-                <x-text-input wire:model.live.debounce.400ms="cost_rate" id="purchase_cost_rate" type="number" step="0.01" min="0" placeholder="e.g. 11.50" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('cost_rate')" class="mt-2" />
+                <x-input-label for="purchase_purchase_rate" value="Purchase Rate" />
+                <x-text-input wire:model.live.debounce.400ms="purchase_rate" id="purchase_purchase_rate" type="number" step="0.01" min="0" placeholder="e.g. 11.50 (what we pay)" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('purchase_rate')" class="mt-2" />
             </div>
 
-            @if ($costAmountPreview !== null)
-                <p class="text-sm text-slate-600 dark:text-slate-400">Cost Amount: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($costAmountPreview, 2) }}</span></p>
+            <div>
+                <x-input-label for="purchase_sale_rate" value="Sale Rate" />
+                <x-text-input wire:model.live.debounce.400ms="sale_rate" id="purchase_sale_rate" type="number" step="0.01" min="0" placeholder="e.g. 12.50 (what Tiffin is charged internally)" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('sale_rate')" class="mt-2" />
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Locks Tiffin's own cost rate for Egg in Job Entries — the gap between this and the
+                    Purchase Rate is margin, but only for whatever share of this purchase actually goes to
+                    Tiffin (see the overall "Egg Business Profit" figure above for the real total, which
+                    also counts eggs sold externally).
+                </p>
+            </div>
+
+            @if ($purchaseAmountPreview !== null)
+                <p class="text-sm text-slate-600 dark:text-slate-400">Purchase Amount: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($purchaseAmountPreview, 2) }}</span></p>
+            @endif
+            @if ($saleAmountPreview !== null)
+                <p class="text-sm text-slate-600 dark:text-slate-400">Sale Amount (if fully used by Tiffin): <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($saleAmountPreview, 2) }}</span></p>
+            @endif
+            @if ($profitPreview !== null)
+                <p class="text-sm text-slate-600 dark:text-slate-400">Implied Margin (if fully used by Tiffin): <span class="font-semibold text-emerald-600 dark:text-emerald-400">{{ number_format($profitPreview, 2) }}</span></p>
             @endif
 
             <div>
@@ -1344,86 +1099,6 @@ new class extends Component
             <div class="mt-6 flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
                 <x-danger-button type="button" wire:click="delete">Delete</x-danger-button>
-            </div>
-        </div>
-    </x-modal>
-
-    <x-modal name="egg-sale-form" focusable>
-        <form wire:submit="saveSale" class="space-y-6 p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
-                {{ $editingSaleId ? 'Edit Sale' : 'Record Sale' }}
-            </h2>
-
-            <div>
-                <x-input-label for="sale_date" value="Sale Date" />
-                <x-text-input wire:model.live="sale_date" id="sale_date" type="date" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('sale_date')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="sale_quantity" value="Quantity" />
-                <x-text-input wire:model.live.debounce.400ms="sale_quantity" id="sale_quantity" type="number" step="0.01" min="0" placeholder="e.g. 200" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('sale_quantity')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="sale_rate" value="Sale Rate" />
-                <x-text-input wire:model.live.debounce.400ms="sale_rate" id="sale_rate" type="number" step="0.01" min="0" placeholder="e.g. 14.00" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('sale_rate')" class="mt-2" />
-            </div>
-
-            @if ($saleAmountPreview !== null)
-                <p class="text-sm text-slate-600 dark:text-slate-400">Sale Amount: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($saleAmountPreview, 2) }}</span></p>
-            @endif
-
-            <div>
-                <x-input-label for="buyer_name" value="Buyer Name" />
-                <x-text-input wire:model="buyer_name" id="buyer_name" placeholder="Optional" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('buyer_name')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="payment_status" value="Payment Type" />
-                <x-select-input wire:model="payment_status" id="payment_status" class="mt-1 block w-full">
-                    <option value="cash">Cash</option>
-                    <option value="due">Due</option>
-                </x-select-input>
-                <x-input-error :messages="$errors->get('payment_status')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="in_charge" value="In-Charge" />
-                <x-text-input wire:model="in_charge" id="in_charge" placeholder="e.g. Mr. Karim" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('in_charge')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="sale_remarks" value="Remarks" />
-                <x-textarea-input wire:model="sale_remarks" id="sale_remarks" placeholder="Optional" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('sale_remarks')" class="mt-2" />
-            </div>
-
-            <div class="flex justify-end gap-3">
-                <x-secondary-button type="button" x-on:click="$dispatch('close')">
-                    Cancel
-                </x-secondary-button>
-                <x-primary-button>
-                    {{ $editingSaleId ? 'Save Changes' : 'Record Sale' }}
-                </x-primary-button>
-            </div>
-        </form>
-    </x-modal>
-
-    <x-modal name="confirm-egg-sale-deletion" focusable>
-        <div class="p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Delete this sale?</h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                This cannot be undone. Deleting this sale increases the "In Stock Now" figure back up, since
-                those eggs are no longer counted as sold.
-            </p>
-            <div class="mt-6 flex justify-end gap-3">
-                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
-                <x-danger-button type="button" wire:click="deleteSale">Delete</x-danger-button>
             </div>
         </div>
     </x-modal>

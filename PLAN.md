@@ -4172,3 +4172,135 @@ design.
 permission; setting `accountantGrants.JobEntriesModify` directly
 (bypassing the hidden checkbox entirely) and calling `saveAccountant()`
 still doesn't grant it. 408 tests passing overall.
+
+## Egg Sales: registered buyers + a real monthly cash/due system (done, 2026-09-10)
+
+The egg side-business (buying eggs, using some internally for Tiffin,
+selling the rest to outside buyers) needed real cash/due tracking on
+the sales side — confirmed with the client that eggs used internally
+by Tiffin are already fully covered by the normal factory invoice, so
+this is entirely about external sales.
+
+`EggSale.buyer_name` (free text) is replaced by a proper `EggBuyer`
+model (name, phone, remarks) — the same real buyer no longer risks
+being spelled three different ways across sales, which matters once a
+whole month's sales need to be reliably grouped per buyer. The
+migration backfills one `EggBuyer` per distinct existing `buyer_name`
+before dropping the column, since **this app now runs against a real
+copy of the client's production database** (no longer pre-launch) —
+every schema change here is a new additive migration, not folded into
+an old one, per the now-stale assumption in `.ai/rules/migrations.md`
+(worth revisiting separately).
+
+Initially built a full generated/locked "Bill" document (mirroring
+Invoice/JobEntry's claim-and-lock pattern) — the client didn't want
+that formality; a bulk per-sale approval step to send eggs out only
+adds friction and isn't how the office actually works with buyers, so
+the whole `EggSaleBill`/`EggSaleBillPayment` layer, its print view, and
+the Bills tab were removed again before ever being committed. What
+stayed, and is now the real "complete system": the **Buyer Summary**
+tab — grouped by buyer (by id, not name, so two buyers can never
+collide) for whatever Year/Month is selected, showing quantity, cash,
+due, and paid side by side. Each row has **View** (jumps to the Sales
+tab pre-filtered to that exact buyer and period — the itemized data
+behind the total, one click away) and, when there's a due balance,
+**Mark Paid** (`markBuyerPaid()` — settles every Due sale for that
+buyer within the period being viewed, in one action, instead of
+marking each sale paid individually — which is exactly what the client
+asked to stop doing). Sales + Buyer Summary live in a new
+`egg-sales/sales-manager.blade.php`, split out of
+`egg-purchases/purchase-manager.blade.php` (already ~1500 lines
+covering Purchases/Supply/Waste alone) the same way `invoices/`
+already relates to `job-entries/`. A "+ New Buyer" toggle inside the
+sale form creates a buyer inline (`addBuyerInline()`), and an "Edit"
+toggle next to it renames the selected buyer in place
+(`saveBuyerInline()`) — both inline in the sale form rather than a
+separate buyer-management page, per the client's explicit preference.
+
+Separately, fixed the invoice VAT math across all 4 places it's
+computed (`invoice-detail.blade.php`, `bill-statement.blade.php`,
+`dashboard.blade.php`, `SendDailyReport.php`) to **deduct** VAT from
+the total instead of adding it, per the client's actual billing
+convention — the invoice print view now shows a `−` sign on the VAT
+line so it reads unambiguously. Bill Statement also gained an "Actual
+Amount" column (the raw pre-VAT figure) alongside "Amount (After VAT)"
+so the deduction isn't hidden, and its page size went from 15 to 30
+rows.
+
+24 tests in `EggSalesManagementTest.php` (sales CRUD, buyer filter,
+inline buyer creation + rename + duplicate-name rejection, buyer
+summary + its filters, View jumping to the right filtered Sales list,
+Mark Paid settling only that buyer's Due sales within the viewed
+period and nothing else, Accountant permission checks); `EggStockManagementTest.php`
+trimmed to just Purchases/Supply/Waste plus a rewritten
+permission-visibility test. 419 tests passing overall.
+
+## Egg Purchases: split Purchase Rate from Sale Rate, so the egg business's own profit is visible (done, 2026-09-10)
+
+Egg Purchase's `cost_rate`/`cost_amount` were doing double duty — the
+raw cost the egg business paid a supplier, and also (via
+`TiffinItemPurchase::findFor()`) the rate Tiffin's own Job Entries get
+locked to for Egg. The client wants to see the egg business's own
+margin, separate from what Tiffin pays internally, so the single rate
+is now two: `purchase_rate`/`purchase_amount` (renamed from
+`cost_rate`/`cost_amount` — a new additive migration + backfill, not
+folded into the original migration, since this app runs against real
+production data now) and a new required `sale_rate` — what Tiffin is
+internally charged per egg. `profit` and `saleAmount` are computed
+accessors on `TiffinItemPurchase` (quantity × sale_rate, and that minus
+purchase_amount), never stored, same anti-drift convention as
+`Invoice::subtotal()`.
+
+Every `TiffinItemPurchase::findFor()` caller that locks a Tiffin Job
+Entry's cost rate (`job-entry-form.blade.php`'s batch save + the legacy
+single-entry path, and `tiffin-batch-edit-form.blade.php`) now locks to
+`sale_rate` instead of `purchase_rate` — Tiffin's own cost basis
+reflects what it "pays" its internal egg supplier, not the raw
+wholesale price, so the two sub-businesses' profit stays cleanly
+separated. The "Locked from the day's purchase" hint text on both
+forms updates to show the sale rate accordingly, since that's what's
+actually driving the locked value now.
+
+Purchases tab gained an "Egg Business Profit" summary card, gated
+behind `dashboard.view_profit` (the same permission that already
+hides profit figures on the Dashboard) rather than `egg_purchases.view`
+— margin data gets the same sensitivity treatment everywhere in this
+app.
+
+The first version of that card only counted a purchase's own implied
+margin (quantity × (sale_rate − purchase_rate)), which silently assumed
+every purchased egg gets consumed by Tiffin and ignored money paid by
+external buyers entirely. The client caught this ("it must count the
+entire eggs supply we provide across all factories and other buyers")
+and it's now a real P&L: `eggProfitTotal` = Tiffin's internal "revenue"
+(`job_entries.cost_amount` summed for Egg entries, i.e. quantity ×
+each entry's locked sale_rate) + external revenue (`EggSale.sale_amount`
+summed) − the real total spend (`TiffinItemPurchase.purchase_amount`
+summed). Computed live in `stockSummary()`, never stored, same
+anti-drift convention as `Invoice::subtotal()`. Wasted/unsold stock
+falls out of the formula naturally (its cost is counted, it earns
+nothing back) rather than needing its own line item, so the figure can
+legitimately go negative while a lot of purchased stock is still
+sitting unconsumed — that's expected, not a bug. The per-row purchase-list
+profit tag was removed (a single purchase's implied margin isn't the
+real realized profit once eggs are split across Tiffin/external-sale/
+waste outcomes); the create-form's preview labels were reworded to
+"...(if fully used by Tiffin)" to make clear they're only an implied
+per-purchase margin, not the total.
+
+The three `TiffinItemPurchase::findFor()`-driven Job Entry locking
+tests (`JobEntryManagementTest.php`) were rewritten with a purchase
+rate deliberately different from its sale rate, so they'd actually fail
+if the code regressed to locking on purchase_rate again — same
+"evidence, not just formula" instinct as everywhere else rates get
+locked. Every raw `TiffinItemPurchase::create()` fixture across
+`EggPurchaseManagementTest.php`, `EggStockManagementTest.php`,
+`EggSalesManagementTest.php`, `JobEntryManagementTest.php`, and
+`SettingsManagementTest.php` updated to the renamed columns; the
+Livewire form's own `cost_rate` property split into `purchase_rate` +
+`sale_rate`, both now required. A new test proves the corrected
+`eggProfitTotal` formula sums Tiffin's internal charge and external
+sale revenue against the real purchase cost — deliberately built to
+land on a negative figure, to prove unsold/wasted stock is correctly
+treated as a temporary loss rather than deferred. 421 tests passing
+overall.

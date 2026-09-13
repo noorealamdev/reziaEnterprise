@@ -129,7 +129,7 @@ new class extends Component
             ->select('entry_date')
             ->distinct()
             ->orderByDesc('entry_date')
-            ->simplePaginate(10)
+            ->simplePaginate(20)
             ->setPath($this->paginationPath)
             ->appends(array_filter([
                 'company' => $this->companyFilter,

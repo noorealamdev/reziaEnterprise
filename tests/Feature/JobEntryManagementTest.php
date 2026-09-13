@@ -213,8 +213,8 @@ test('pagination never splits a single date across two pages', function () {
     $company = Company::factory()->create();
     $category = makeServiceCategory('Daily Basic Labour');
 
-    // A busy day with far more rows than the page size, plus nine other
-    // distinct dates — ten distinct dates in total, exactly one page's
+    // A busy day with far more rows than the page size, plus nineteen other
+    // distinct dates — twenty distinct dates in total, exactly one page's
     // worth, so the busy day's 15 rows must all still land on page 1
     // together rather than being cut off at a fixed row count.
     JobEntry::factory()->count(15)->create([
@@ -223,31 +223,31 @@ test('pagination never splits a single date across two pages', function () {
         'entry_date' => '2026-09-10',
     ]);
 
-    foreach (range(1, 9) as $day) {
+    foreach (range(1, 19) as $day) {
         JobEntry::factory()->create([
             'company_id' => $company->id,
             'service_category_id' => $category->id,
-            'entry_date' => "2026-09-0{$day}",
+            'entry_date' => sprintf('2026-08-%02d', $day),
         ]);
     }
 
-    // An 11th, older distinct date — pushed to page 2.
+    // A 21st, older distinct date — pushed to page 2.
     JobEntry::factory()->create([
         'company_id' => $company->id,
         'service_category_id' => $category->id,
-        'entry_date' => '2026-08-20',
+        'entry_date' => '2026-07-01',
     ]);
 
     $this->actingAs($user);
 
     $page1 = Volt::test('job-entries.job-entry-list');
-    expect($page1->viewData('groupedEntries'))->toHaveCount(10);
+    expect($page1->viewData('groupedEntries'))->toHaveCount(20);
     expect($page1->viewData('groupedEntries')['2026-09-10']->flatten(1))->toHaveCount(15);
-    $page1->assertSee('10 Sep 2026')->assertDontSee('20 Aug 2026');
+    $page1->assertSee('10 Sep 2026')->assertDontSee('01 Jul 2026');
 
     $page2 = $page1->call('gotoPage', 2);
     expect($page2->viewData('groupedEntries'))->toHaveCount(1);
-    $page2->assertSee('20 Aug 2026')->assertDontSee('10 Sep 2026');
+    $page2->assertSee('01 Jul 2026')->assertDontSee('10 Sep 2026');
 });
 
 test('creating a simple entry persists with correct cost, bill and profit amounts', function () {
@@ -1065,8 +1065,12 @@ test('a matching purchase locks the created tiffin entry cost rate, even if a di
         'tiffin_item_id' => $egg->id,
         'purchase_date' => now()->toDateString(),
         'quantity' => 500,
-        'cost_rate' => 12,
-        'cost_amount' => 6000,
+        'purchase_rate' => 12,
+        'purchase_amount' => 6000,
+        // Deliberately different from purchase_rate — the lock uses this,
+        // not purchase_rate, so a wrong assertion here would still pass if
+        // the code regressed to locking on purchase_rate instead.
+        'sale_rate' => 15,
     ]);
 
     $this->actingAs($user);
@@ -1081,13 +1085,14 @@ test('a matching purchase locks the created tiffin entry cost rate, even if a di
         ->call('saveTiffinItemBatch')
         ->assertHasNoErrors();
 
-    // Headcount 200 + the fixed egg buffer (5) = 205 eggs actually costed.
+    // Headcount 200 + the fixed egg buffer (5) = 205 eggs actually costed,
+    // at the purchase's sale_rate (15), not its purchase_rate (12).
     $this->assertDatabaseHas('job_entries', [
         'tiffin_department_id' => $swing->id,
         'supply_type' => 'Egg',
         'quantity' => 205,
-        'cost_rate' => 12,
-        'cost_amount' => 2460,
+        'cost_rate' => 15,
+        'cost_amount' => 3075,
     ]);
 });
 
@@ -1135,8 +1140,9 @@ test('with no purchase on the exact date, the most recent earlier purchase still
         'tiffin_item_id' => $egg->id,
         'purchase_date' => now()->subDays(3)->toDateString(),
         'quantity' => 500,
-        'cost_rate' => 12,
-        'cost_amount' => 6000,
+        'purchase_rate' => 12,
+        'purchase_amount' => 6000,
+        'sale_rate' => 15,
     ]);
 
     $this->actingAs($user);
@@ -1154,7 +1160,7 @@ test('with no purchase on the exact date, the most recent earlier purchase still
     $this->assertDatabaseHas('job_entries', [
         'tiffin_department_id' => $swing->id,
         'supply_type' => 'Egg',
-        'cost_rate' => 12,
+        'cost_rate' => 15,
     ]);
 });
 
@@ -1289,26 +1295,28 @@ test('the tiffin batch edit form also locks cost rate from a matching purchase',
         'tiffin_item_id' => $egg->id,
         'purchase_date' => '2026-08-15',
         'quantity' => 500,
-        'cost_rate' => 13,
-        'cost_amount' => 6500,
+        'purchase_rate' => 13,
+        'purchase_amount' => 6500,
+        'sale_rate' => 16,
     ]);
 
     $this->actingAs($user);
 
     Volt::test('job-entries.tiffin-batch-edit-form', ['company' => $company, 'department' => $swing, 'date' => '2026-08-15'])
-        ->assertSet('costRates.Egg', '13.00')
+        ->assertSet('costRates.Egg', '16.00')
         ->set('costRates.Egg', '999')
         ->set('quantities.Egg', '50')
         ->call('save')
         ->assertHasNoErrors();
 
-    // Headcount 50 + the fixed egg buffer (5) = 55 eggs actually costed.
+    // Headcount 50 + the fixed egg buffer (5) = 55 eggs actually costed, at
+    // the purchase's sale_rate (16), not its purchase_rate (13).
     $this->assertDatabaseHas('job_entries', [
         'tiffin_department_id' => $swing->id,
         'supply_type' => 'Egg',
-        'cost_rate' => 13,
+        'cost_rate' => 16,
         'quantity' => 55,
-        'cost_amount' => 715,
+        'cost_amount' => 880,
     ]);
 });
 

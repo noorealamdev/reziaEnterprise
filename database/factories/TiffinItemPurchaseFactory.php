@@ -19,15 +19,17 @@ class TiffinItemPurchaseFactory extends Factory
     public function definition(): array
     {
         $quantity = fake()->randomFloat(2, 50, 500);
-        $costRate = fake()->randomFloat(2, 5, 20);
+        $purchaseRate = fake()->randomFloat(2, 5, 20);
+        $saleRate = round($purchaseRate * 1.1, 2);
 
         return [
             'tiffin_item_id' => fn () => TiffinItem::query()->inRandomOrder()->value('id')
                 ?? TiffinItem::create(['name' => fake()->unique()->word()])->id,
             'purchase_date' => now()->toDateString(),
             'quantity' => $quantity,
-            'cost_rate' => $costRate,
-            'cost_amount' => round($quantity * $costRate, 2),
+            'purchase_rate' => $purchaseRate,
+            'purchase_amount' => round($quantity * $purchaseRate, 2),
+            'sale_rate' => $saleRate,
             'supplier_name' => fake()->company(),
             'remarks' => null,
             'created_by' => null,

@@ -207,7 +207,7 @@ new class extends Component
             'agreements' => $agreementsQuery->clone()
                 ->orderBy('end_date')
                 ->orderByDesc('id')
-                ->simplePaginate(10)
+                ->simplePaginate(20)
                 ->setPath($this->paginationPath)
                 ->appends($this->urlQueryState()),
             'expiringCount' => CompanyAgreement::when($this->companyFilter, fn ($query) => $query->where('company_id', $this->companyFilter))

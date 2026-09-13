@@ -5,6 +5,7 @@ use App\Models\Invoice;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\Rule;
@@ -15,6 +16,8 @@ new class extends Component
     public ?int $company_id = null;
 
     public ?int $service_category_id = null;
+
+    public ?int $tiffin_department_id = null;
 
     public string $period = '';
 
@@ -36,10 +39,17 @@ new class extends Component
     public function updatedCompanyId(): void
     {
         $this->service_category_id = null;
+        $this->tiffin_department_id = null;
         $this->period = '';
     }
 
     public function updatedServiceCategoryId(): void
+    {
+        $this->tiffin_department_id = null;
+        $this->period = '';
+    }
+
+    public function updatedTiffinDepartmentId(): void
     {
         $this->period = '';
     }
@@ -48,9 +58,24 @@ new class extends Component
     {
         Gate::authorize('invoices.create');
 
+        $requiresDepartment = $this->tiffinDepartmentRequired();
+
         $validated = $this->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'],
             'service_category_id' => ['required', 'integer', 'exists:service_categories,id'],
+            // Factories want Swing and Wash Worker billed separately, not
+            // combined into one Tiffin invoice — so a department is picked
+            // up front here, same as it's required on the Job Entry itself.
+            // Only required once the company actually has departments
+            // configured — a company with none still has plain, department-
+            // less Tiffin entries, and those must stay invoiceable exactly
+            // as before.
+            'tiffin_department_id' => [
+                Rule::requiredIf($requiresDepartment),
+                'nullable',
+                'integer',
+                Rule::exists('company_tiffin_departments', 'tiffin_department_id')->where('company_id', $this->company_id),
+            ],
             'period' => ['required', 'date_format:Y-m'],
             'invoice_number' => ['required', 'string', 'max:255', Rule::unique('invoices', 'invoice_number')],
             'vatRate' => ['nullable', 'numeric', 'min:0', 'max:100'],
@@ -61,6 +86,7 @@ new class extends Component
 
         $entries = JobEntry::where('company_id', $this->company_id)
             ->where('service_category_id', $this->service_category_id)
+            ->when($validated['tiffin_department_id'] ?? null, fn ($query, $departmentId) => $query->where('tiffin_department_id', $departmentId))
             ->whereBetween('entry_date', [$start->toDateString(), $end->toDateString()])
             ->whereNull('invoice_id')
             ->get();
@@ -97,17 +123,48 @@ new class extends Component
         $this->redirect(route('invoices.show', $invoice), navigate: true);
     }
 
+    /**
+     * The selected company's Tiffin departments — only populated when the
+     * category is Tiffin, since that's the one category factories want
+     * billed per department instead of as one combined invoice.
+     */
+    private function companyTiffinDepartments(): Collection
+    {
+        if (! $this->company_id || ! $this->service_category_id) {
+            return collect();
+        }
+
+        if (ServiceCategory::find($this->service_category_id)?->name !== 'Tiffin') {
+            return collect();
+        }
+
+        return Company::find($this->company_id)?->tiffinDepartments()->orderBy('name')->get() ?? collect();
+    }
+
+    /**
+     * A department only has to be picked when the company actually has any
+     * configured — a company with none still has plain, department-less
+     * Tiffin entries, and those stay invoiceable exactly as before.
+     */
+    private function tiffinDepartmentRequired(): bool
+    {
+        return $this->companyTiffinDepartments()->isNotEmpty();
+    }
+
     public function with(): array
     {
         $company = $this->company_id ? Company::find($this->company_id) : null;
+        $tiffinDepartments = $this->companyTiffinDepartments();
+        $requiresDepartment = $tiffinDepartments->isNotEmpty();
 
         $serviceCategories = $company
             ? $company->serviceCategories()->orderBy('sort_order')->get()
             : collect();
 
-        $periodOptions = ($this->company_id && $this->service_category_id)
+        $periodOptions = ($this->company_id && $this->service_category_id && (! $requiresDepartment || $this->tiffin_department_id))
             ? JobEntry::where('company_id', $this->company_id)
                 ->where('service_category_id', $this->service_category_id)
+                ->when($requiresDepartment, fn ($query) => $query->where('tiffin_department_id', $this->tiffin_department_id))
                 ->get(['entry_date'])
                 ->map(fn (JobEntry $entry) => $entry->entry_date->format('Y-m'))
                 ->unique()
@@ -117,12 +174,16 @@ new class extends Component
 
         $preview = null;
 
-        if ($this->company_id && $this->service_category_id && preg_match('/^\d{4}-\d{2}$/', $this->period)) {
+        if (
+            $this->company_id && $this->service_category_id && (! $requiresDepartment || $this->tiffin_department_id)
+            && preg_match('/^\d{4}-\d{2}$/', $this->period)
+        ) {
             $start = Carbon::createFromFormat('Y-m', $this->period)->startOfMonth();
             $end = $start->copy()->endOfMonth();
 
             $unbilledQuery = JobEntry::where('company_id', $this->company_id)
                 ->where('service_category_id', $this->service_category_id)
+                ->when($requiresDepartment, fn ($query) => $query->where('tiffin_department_id', $this->tiffin_department_id))
                 ->whereBetween('entry_date', [$start->toDateString(), $end->toDateString()])
                 ->whereNull('invoice_id');
 
@@ -132,6 +193,10 @@ new class extends Component
                 'existingInvoices' => Invoice::where('company_id', $this->company_id)
                     ->where('service_category_id', $this->service_category_id)
                     ->where('period_start', $start->toDateString())
+                    ->when($requiresDepartment, fn ($query) => $query->whereHas(
+                        'jobEntries',
+                        fn ($entryQuery) => $entryQuery->where('tiffin_department_id', $this->tiffin_department_id)
+                    ))
                     ->get(),
             ];
         }
@@ -139,6 +204,7 @@ new class extends Component
         return [
             'companies' => Company::orderBy('name')->get(),
             'serviceCategories' => $serviceCategories,
+            'tiffinDepartments' => $tiffinDepartments,
             'periodOptions' => $periodOptions,
             'preview' => $preview,
         ];
@@ -173,17 +239,40 @@ new class extends Component
         <x-input-error :messages="$errors->get('service_category_id')" class="mt-2" />
     </div>
 
+    @if ($tiffinDepartments->isNotEmpty())
+        <div>
+            <x-input-label for="tiffin_department_id" value="Tiffin Department" />
+            <x-select-input wire:model.live="tiffin_department_id" id="tiffin_department_id" class="mt-1 block w-full" required>
+                <option value="">Select a department…</option>
+                @foreach ($tiffinDepartments as $department)
+                    <option value="{{ $department->id }}">{{ $department->name }}</option>
+                @endforeach
+            </x-select-input>
+            <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
+                Factories want each Tiffin department billed separately — Swing and Wash Worker each get
+                their own invoice, never combined into one.
+            </p>
+            <x-input-error :messages="$errors->get('tiffin_department_id')" class="mt-2" />
+        </div>
+    @endif
+
     <div>
         <x-input-label for="period" value="Month" />
-        <x-select-input wire:model.live="period" id="period" class="mt-1 block w-full" required :disabled="! $service_category_id">
+        <x-select-input wire:model.live="period" id="period" class="mt-1 block w-full" required :disabled="! $service_category_id || ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)">
             <option value="">
-                {{ $service_category_id ? 'Select a month…' : 'Select a category first' }}
+                @if (! $service_category_id)
+                    Select a category first
+                @elseif ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)
+                    Select a department first
+                @else
+                    Select a month…
+                @endif
             </option>
             @foreach ($periodOptions as $option)
                 <option value="{{ $option }}">{{ \Illuminate\Support\Carbon::createFromFormat('Y-m', $option)->format('F Y') }}</option>
             @endforeach
         </x-select-input>
-        @if ($service_category_id && $periodOptions->isEmpty())
+        @if ($service_category_id && ($tiffinDepartments->isEmpty() || $tiffin_department_id) && $periodOptions->isEmpty())
             <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">This company has no entries in this category yet.</p>
         @endif
         <x-input-error :messages="$errors->get('period')" class="mt-2" />

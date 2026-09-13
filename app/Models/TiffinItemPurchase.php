@@ -18,8 +18,9 @@ class TiffinItemPurchase extends Model
         'tiffin_item_id',
         'purchase_date',
         'quantity',
-        'cost_rate',
-        'cost_amount',
+        'purchase_rate',
+        'purchase_amount',
+        'sale_rate',
         'supplier_name',
         'memo_path',
         'remarks',
@@ -34,8 +35,9 @@ class TiffinItemPurchase extends Model
         return [
             'purchase_date' => 'date',
             'quantity' => 'decimal:2',
-            'cost_rate' => 'decimal:2',
-            'cost_amount' => 'decimal:2',
+            'purchase_rate' => 'decimal:2',
+            'purchase_amount' => 'decimal:2',
+            'sale_rate' => 'decimal:2',
         ];
     }
 
@@ -60,6 +62,30 @@ class TiffinItemPurchase extends Model
     {
         return Attribute::make(
             get: fn (): bool => str_ends_with((string) $this->memo_path, '.pdf'),
+        );
+    }
+
+    /**
+     * What this purchase is worth at the internal sale rate — computed
+     * live, never stored, same anti-drift principle as purchase_amount
+     * being the only rate figure actually persisted.
+     */
+    protected function saleAmount(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): float => round((float) $this->quantity * (float) $this->sale_rate, 2),
+        );
+    }
+
+    /**
+     * The egg business's own margin on this purchase — sale value minus
+     * what was actually paid for it. Separate from Tiffin's profit
+     * (bill vs cost on job entries), which is a different business.
+     */
+    protected function profit(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): float => round($this->saleAmount - (float) $this->purchase_amount, 2),
         );
     }
 

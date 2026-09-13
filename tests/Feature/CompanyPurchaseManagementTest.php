@@ -322,6 +322,55 @@ test('a cash payment cannot exceed what remains on the purchase, even after an a
     expect($purchase->fresh()->remainingBalance)->toBe(2000.0);
 });
 
+test('viewing adjustments on a purchase shows which invoices it settled and for how much', function () {
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    $purchase = CompanyPurchase::factory()->create([
+        'company_id' => $company->id,
+        'amount' => 5000,
+        'description' => 'Garment Lot',
+    ]);
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'ADJ-VIEW-1',
+        'period_start' => '2026-09-01',
+        'period_end' => '2026-09-30',
+        'status' => 'due',
+        'manual_amount' => 3000,
+    ]);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->call('startRecordPayment')
+        ->set('paymentAmount', '3000')
+        ->set('paymentDate', '2026-09-05')
+        ->set('paymentType', 'adjustment')
+        ->set('companyPurchaseId', $purchase->id)
+        ->call('recordPayment')
+        ->assertHasNoErrors();
+
+    $component = Volt::test('company-purchases.purchase-manager')
+        ->assertSee('View Bill Adjustments (1)')
+        ->call('viewAdjustments', $purchase->id)
+        ->assertSee('ADJ-VIEW-1')
+        ->assertSee('3,000.00');
+
+    expect($component->viewData('viewingAdjustments')->id)->toBe($purchase->id);
+});
+
+test('a purchase with no adjustments recorded shows no adjustments link', function () {
+    $user = User::factory()->create();
+    $purchase = CompanyPurchase::factory()->create(['amount' => 5000]);
+
+    $this->actingAs($user);
+
+    Volt::test('company-purchases.purchase-manager')
+        ->assertDontSee('View Bill Adjustments');
+});
+
 test('deleting a cash payment restores the purchase\'s remaining balance', function () {
     $user = User::factory()->create();
     $purchase = CompanyPurchase::factory()->create(['amount' => 5000]);

@@ -15,7 +15,7 @@ new class extends Component
     use WithPagination;
 
     /** Rows per screen page — print always shows every filtered row regardless of this. */
-    private const PER_PAGE = 15;
+    private const PER_PAGE = 30;
 
     #[Url(as: 'company', history: true)]
     public string $companyFilter = '';
@@ -124,7 +124,11 @@ new class extends Component
                     'company' => $invoice->company,
                     'category' => $invoice->serviceCategory,
                     'period_start' => $invoice->period_start,
-                    'amount' => $amount + $vatAmount,
+                    // The raw bill total before VAT is deducted — shown
+                    // alongside 'amount' (the net, VAT-deducted figure) so
+                    // the statement doesn't hide what VAT was taken off.
+                    'actualAmount' => $amount,
+                    'amount' => $amount - $vatAmount,
                     'status' => $invoice->status,
                     'invoice' => $invoice,
                     // Real money received so far — an advance paid before
@@ -133,7 +137,7 @@ new class extends Component
                     // afterward, and both need to count here so Total Paid
                     // + Total Outstanding always reconciles to Total Billed.
                     'paidAmount' => $advancePaid + $paidViaPayments,
-                    'balanceDue' => max(0, $amount + $vatAmount - $advancePaid - $paidViaPayments),
+                    'balanceDue' => max(0, $amount - $vatAmount - $advancePaid - $paidViaPayments),
                     // A signed copy on file is proof the bill was both sent
                     // to the factory and handed back signed — there's no
                     // separate "sent" flag to track, since the two always
@@ -165,6 +169,8 @@ new class extends Component
                     'company' => $first->company,
                     'category' => $first->serviceCategory,
                     'period_start' => $first->entry_date->copy()->startOfMonth(),
+                    // No VAT concept before an invoice exists — same as 'amount'.
+                    'actualAmount' => $amount,
                     'amount' => $amount,
                     'status' => 'pending',
                     'invoice' => null,
@@ -372,7 +378,8 @@ new class extends Component
                             @endunless
                             <th class="px-4 py-2 print:px-2 print:py-1">Invoice</th>
                             <th class="px-4 py-2 print:px-2 print:py-1">Period</th>
-                            <th class="px-4 py-2 text-right print:px-2 print:py-1">Amount</th>
+                            <th class="px-4 py-2 text-right print:px-2 print:py-1">Actual Amount</th>
+                            <th class="px-4 py-2 text-right print:px-2 print:py-1">Amount (After VAT)</th>
                             <th class="px-4 py-2 print:px-2 print:py-1">Status</th>
                             <th class="px-4 py-2 text-right print:px-2 print:py-1">Balance Due</th>
                         </tr>
@@ -411,6 +418,7 @@ new class extends Component
                                     @endif
                                 </td>
                                 <td class="px-4 py-3 text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ $row->period_start->format('F Y') }}</td>
+                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ number_format($row->actualAmount, 2) }}</td>
                                 <td class="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200 print:px-2 print:py-1">{{ number_format($row->amount, 2) }}</td>
                                 <td class="px-4 py-3 print:px-2 print:py-1">
                                     <div class="flex flex-wrap items-center gap-1">
@@ -434,15 +442,15 @@ new class extends Component
                     <tfoot>
                         <tr class="bg-slate-50 dark:bg-slate-900/50 print:break-inside-avoid print:bg-transparent">
                             <td colspan="{{ $labelSpan }}" class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">Total Billed</td>
-                            <td colspan="3" class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ number_format($totalBilled, 2) }}</td>
+                            <td colspan="4" class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ number_format($totalBilled, 2) }}</td>
                         </tr>
                         <tr class="bg-slate-50 dark:bg-slate-900/50 print:break-inside-avoid print:bg-transparent">
                             <td colspan="{{ $labelSpan }}" class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">Total Paid</td>
-                            <td colspan="3" class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ number_format($totalPaid, 2) }}</td>
+                            <td colspan="4" class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ number_format($totalPaid, 2) }}</td>
                         </tr>
                         <tr class="bg-slate-100 dark:bg-slate-800 print:break-inside-avoid print:border-t print:border-slate-300 print:bg-transparent">
                             <td colspan="{{ $labelSpan }}" class="px-4 py-3 text-base font-bold text-slate-900 dark:text-white print:px-2 print:py-1">Total Outstanding</td>
-                            <td colspan="3" class="px-4 py-3 text-right text-base font-bold {{ $totalOutstanding > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-white' }} print:px-2 print:py-1">
+                            <td colspan="4" class="px-4 py-3 text-right text-base font-bold {{ $totalOutstanding > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-white' }} print:px-2 print:py-1">
                                 {{ number_format($totalOutstanding, 2) }}
                             </td>
                         </tr>
