@@ -26,6 +26,7 @@ class JobEntry extends Model
         'challan_no',
         'unit_label',
         'company_adv_payment',
+        'shipment_tiffin_cost',
         'quantity',
         'cost_rate',
         'bill_rate',
@@ -44,6 +45,7 @@ class JobEntry extends Model
         return [
             'entry_date' => 'date',
             'company_adv_payment' => 'decimal:2',
+            'shipment_tiffin_cost' => 'decimal:2',
             'quantity' => 'decimal:2',
             'cost_rate' => 'decimal:2',
             'bill_rate' => 'decimal:2',
@@ -57,7 +59,11 @@ class JobEntry extends Model
     protected static function booted(): void
     {
         static::saving(function (JobEntry $jobEntry): void {
-            $jobEntry->profit_amount = (float) $jobEntry->bill_amount - (float) $jobEntry->cost_amount;
+            // shipment_tiffin_cost is a real cost (feeding labourers on a
+            // Loading Unloading shipment) that's never billed to the
+            // factory — it only ever comes off profit, not cost_amount.
+            $jobEntry->profit_amount = (float) $jobEntry->bill_amount - (float) $jobEntry->cost_amount
+                - (float) ($jobEntry->shipment_tiffin_cost ?? 0);
         });
     }
 

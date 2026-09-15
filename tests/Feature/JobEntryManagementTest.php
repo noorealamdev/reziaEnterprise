@@ -540,6 +540,157 @@ test('the loading unloading batch requires cost and bill rate once an item is to
     $this->assertDatabaseCount('job_entries', 0);
 });
 
+test('a shipment tiffin cost on a Loading Unloading batch reduces profit on only the first item, and never touches the bill', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    $big = LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+    $labour = LoadingUnloadingItem::create(['name' => 'Daily Labour', 'unit_label' => 'Person', 'sort_order' => 2]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->set("batchLUQuantities.{$big->name}", '18')
+        ->set("batchLUCostRates.{$big->name}", '700')
+        ->set("batchLUBillRates.{$big->name}", '850')
+        ->set("batchLUQuantities.{$labour->name}", '4')
+        ->set("batchLUCostRates.{$labour->name}", '500')
+        ->set("batchLUBillRates.{$labour->name}", '600')
+        ->set('shipment_tiffin_cost', '500')
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasNoErrors();
+
+    $bigEntry = JobEntry::where('supply_type', 'Big')->sole();
+    $labourEntry = JobEntry::where('supply_type', 'Daily Labour')->sole();
+
+    // Big is first in sort order, so it alone absorbs the shipment cost —
+    // same "apply once, to the first row" rule as Tiffin's Egg buffer.
+    expect((float) $bigEntry->shipment_tiffin_cost)->toBe(500.0);
+    expect((float) $bigEntry->bill_amount)->toBe(15300.0);
+    expect((float) $bigEntry->cost_amount)->toBe(12600.0);
+    expect((float) $bigEntry->profit_amount)->toBe(2200.0);
+
+    expect($labourEntry->shipment_tiffin_cost)->toBeNull();
+    expect((float) $labourEntry->profit_amount)->toBe(400.0);
+});
+
+test('leaving shipment tiffin cost blank on a Loading Unloading batch does nothing', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    $big = LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('service_category_id', $category->id)
+        ->set("batchLUQuantities.{$big->name}", '18')
+        ->set("batchLUCostRates.{$big->name}", '700')
+        ->set("batchLUBillRates.{$big->name}", '850')
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasNoErrors();
+
+    $bigEntry = JobEntry::where('supply_type', 'Big')->sole();
+    expect($bigEntry->shipment_tiffin_cost)->toBeNull();
+    expect((float) $bigEntry->profit_amount)->toBe(2700.0);
+});
+
+test('editing a job entry can set shipment tiffin cost, and it is cleared if the category changes away from Loading Unloading', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $otherCategory = makeServiceCategory('Diesel Oil Supply');
+    $entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'supply_type' => 'Big',
+        'quantity' => 10,
+        'cost_rate' => 700,
+        'bill_rate' => 850,
+        'cost_amount' => 7000,
+        'bill_amount' => 8500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form', ['jobEntry' => $entry])
+        ->set('shipment_tiffin_cost', '300')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect((float) $entry->fresh()->shipment_tiffin_cost)->toBe(300.0);
+    expect((float) $entry->fresh()->profit_amount)->toBe(1200.0);
+
+    Volt::test('job-entries.job-entry-form', ['jobEntry' => $entry->fresh()])
+        ->set('service_category_id', $otherCategory->id)
+        ->set('supply_type', 'Diesel')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    expect($entry->fresh()->shipment_tiffin_cost)->toBeNull();
+    expect((float) $entry->fresh()->profit_amount)->toBe(1500.0);
+});
+
+test('the job entries list shows shipment tiffin cost when set, on both a batch card and a single entry', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+
+    // Batch card: two items sharing one day, only the first carries the cost.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-09-16',
+        'supply_type' => 'Big',
+        'shipment_tiffin_cost' => 500,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-09-16',
+        'supply_type' => 'Daily Labour',
+        'shipment_tiffin_cost' => null,
+    ]);
+
+    // A standalone single entry on a different day.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-09-10',
+        'supply_type' => 'Wash',
+        'shipment_tiffin_cost' => 250,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-list')
+        ->assertSeeInOrder(['Shipment Tiffin Cost: 500.00', 'Shipment Tiffin Cost: 250.00']);
+});
+
+test('the job entries list does not mention shipment tiffin cost when none was recorded', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'supply_type' => 'Wash',
+        'shipment_tiffin_cost' => null,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-list')
+        ->assertDontSee('Shipment Tiffin Cost');
+});
+
 test('submitting with every Loading Unloading item left blank shows an error', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();

@@ -330,6 +330,9 @@ new class extends Component
                             @if ($first->challan_no)
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Challan {{ $first->challan_no }}</p>
                             @endif
+                            @if ($group->sum('shipment_tiffin_cost') > 0)
+                                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Shipment Tiffin Cost: {{ number_format((float) $group->sum('shipment_tiffin_cost'), 2) }}</p>
+                            @endif
                             @if ($first->remarks)
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $first->remarks }}</p>
                             @endif
@@ -385,6 +388,9 @@ new class extends Component
                                     Rate {{ number_format((float) $first->bill_rate, 2) }} ·
                                     Cost {{ number_format((float) $first->cost_amount, 2) }} · Profit {{ number_format((float) $first->profit_amount, 2) }}
                                 </p>
+                                @if ($first->shipment_tiffin_cost)
+                                    <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Shipment Tiffin Cost: {{ number_format((float) $first->shipment_tiffin_cost, 2) }}</p>
+                                @endif
                                 @if ($first->remarks)
                                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $first->remarks }}</p>
                                 @endif

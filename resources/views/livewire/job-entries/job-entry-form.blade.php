@@ -39,6 +39,8 @@ new class extends Component
 
     public ?string $company_adv_payment = null;
 
+    public ?string $shipment_tiffin_cost = null;
+
     public ?string $quantity = null;
 
     public ?string $cost_rate = null;
@@ -113,6 +115,7 @@ new class extends Component
             $this->floor = $entry->floor;
             $this->challan_no = $entry->challan_no;
             $this->company_adv_payment = $entry->company_adv_payment !== null ? (string) $entry->company_adv_payment : null;
+            $this->shipment_tiffin_cost = $entry->shipment_tiffin_cost !== null ? (string) $entry->shipment_tiffin_cost : null;
             $this->quantity = $entry->quantity !== null ? (string) $entry->quantity : null;
             $this->cost_rate = $entry->cost_rate !== null ? (string) $entry->cost_rate : null;
             $this->bill_rate = $entry->bill_rate !== null ? (string) $entry->bill_rate : null;
@@ -144,6 +147,7 @@ new class extends Component
         $this->batchLUQuantities = [];
         $this->batchLUCostRates = [];
         $this->batchLUBillRates = [];
+        $this->shipment_tiffin_cost = null;
     }
 
     public function updatedServiceCategoryId(): void
@@ -168,6 +172,7 @@ new class extends Component
         $this->style = null;
         $this->floor = null;
         $this->company_adv_payment = null;
+        $this->shipment_tiffin_cost = null;
         $this->refreshMultiItemMode();
         $this->refreshLoadingUnloadingBatchMode();
         $this->attemptRateAutoFill();
@@ -486,6 +491,7 @@ new class extends Component
             'floor' => ['nullable', 'string', 'max:255'],
             'challan_no' => ['nullable', 'string', 'max:255'],
             'company_adv_payment' => ['nullable', 'numeric', 'min:0'],
+            'shipment_tiffin_cost' => ['nullable', 'numeric', 'min:0'],
             'quantity' => ['nullable', 'numeric', 'min:0'],
             'cost_rate' => ['nullable', 'numeric', 'min:0'],
             'bill_rate' => ['nullable', 'numeric', 'min:0'],
@@ -507,6 +513,7 @@ new class extends Component
 
         if ($validated['service_category_id'] != $loadingUnloadingId) {
             $validated['floor'] = null;
+            $validated['shipment_tiffin_cost'] = null;
         }
 
         if ($validated['service_category_id'] != $etpEidId) {
@@ -741,6 +748,7 @@ new class extends Component
         $rules = [
             'company_id' => ['required', 'integer', 'exists:companies,id'],
             'entry_date' => ['required', 'date'],
+            'shipment_tiffin_cost' => ['nullable', 'numeric', 'min:0'],
         ];
 
         foreach ($touchedItems as $item) {
@@ -771,7 +779,13 @@ new class extends Component
             $inCharge = $this->in_charge ? trim($this->in_charge) : null;
             $challanNo = $this->challan_no ? trim($this->challan_no) : null;
 
-            foreach ($rows as $row) {
+            // A one-off cost for the whole shipment, not per item — same
+            // "apply once, to the first row" rule already used for Tiffin's
+            // Egg buffer, so the batch's total profit is reduced by exactly
+            // this amount instead of once per item.
+            $shipmentTiffinCost = is_numeric($this->shipment_tiffin_cost) ? (float) $this->shipment_tiffin_cost : null;
+
+            foreach ($rows as $index => $row) {
                 JobEntry::create([
                     'company_id' => $this->company_id,
                     'service_category_id' => $this->service_category_id,
@@ -784,6 +798,7 @@ new class extends Component
                     'bill_rate' => $row['bill_rate'],
                     'cost_amount' => $row['cost_amount'],
                     'bill_amount' => $row['bill_amount'],
+                    'shipment_tiffin_cost' => $index === 0 ? $shipmentTiffinCost : null,
                     'is_off_day' => $this->is_off_day,
                     'challan_no' => $challanNo,
                     'remarks' => $this->remarks,
@@ -1229,6 +1244,16 @@ new class extends Component
                     @endforeach
 
                     <x-input-error :messages="$errors->get('batchLUQuantities')" class="mt-2" />
+
+                    <div>
+                        <x-input-label for="shipment_tiffin_cost" value="Shipment Tiffin Cost" />
+                        <x-text-input wire:model="shipment_tiffin_cost" id="shipment_tiffin_cost" type="number" step="0.01" min="0" placeholder="e.g. 500 (optional)" class="mt-1 block w-full" />
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            What we pay labourers to feed them on this shipment — a real cost, but never part of the
+                            factory's bill. Deducted from profit only. Leave blank if there wasn't one.
+                        </p>
+                        <x-input-error :messages="$errors->get('shipment_tiffin_cost')" class="mt-2" />
+                    </div>
                 @endif
             </div>
         @endif
@@ -1312,6 +1337,16 @@ new class extends Component
                     class="mt-1 block w-full" required
                 />
                 <x-input-error :messages="$errors->get('bill_amount')" class="mt-2" />
+            </div>
+
+            <div x-show="$wire.service_category_id == {{ $categoryIds['Loading Unloading'] ?? 0 }}" x-cloak>
+                <x-input-label for="shipment_tiffin_cost_single" value="Shipment Tiffin Cost" />
+                <x-text-input wire:model="shipment_tiffin_cost" id="shipment_tiffin_cost_single" type="number" step="0.01" min="0" placeholder="e.g. 500 (optional)" class="mt-1 block w-full" />
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    What we pay labourers to feed them on this shipment — a real cost, but never part of the
+                    factory's bill. Deducted from profit only. Leave blank if there wasn't one.
+                </p>
+                <x-input-error :messages="$errors->get('shipment_tiffin_cost')" class="mt-2" />
             </div>
         </div>
         @endunless
