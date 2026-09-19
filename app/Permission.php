@@ -55,6 +55,12 @@ enum Permission: string
     case ExpensesCreate = 'expenses.create';
     case ExpensesModify = 'expenses.modify';
 
+    case SajjatView = 'sajjat.view';
+    case SajjatCreate = 'sajjat.create';
+    case SajjatModify = 'sajjat.modify';
+
+    case PersonalLedgerManage = 'personal-ledger.manage';
+
     case SettingsManage = 'settings.manage';
 
     public function label(): string
@@ -96,6 +102,10 @@ enum Permission: string
             self::ExpensesView => 'View expenses',
             self::ExpensesCreate => 'Record expenses',
             self::ExpensesModify => 'Edit / delete expenses',
+            self::SajjatView => 'View Sajjat wallet balances & ledger',
+            self::SajjatCreate => 'Record Sajjat top-ups & expenses',
+            self::SajjatModify => 'Edit / delete Sajjat entries',
+            self::PersonalLedgerManage => 'Use the Personal Ledger (contacts, sales & payments)',
             self::SettingsManage => 'Manage company logo',
         };
     }
@@ -118,6 +128,8 @@ enum Permission: string
             self::EmployeesView, self::EmployeesCreate, self::EmployeesModify,
             self::SalaryPaymentsCreate, self::SalaryPaymentsModify => 'Staff Salaries',
             self::ExpensesView, self::ExpensesCreate, self::ExpensesModify => 'Expenses',
+            self::SajjatView, self::SajjatCreate, self::SajjatModify => 'Sajjat',
+            self::PersonalLedgerManage => 'Personal Ledger',
             self::SettingsManage => 'Settings',
         };
     }

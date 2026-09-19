@@ -168,5 +168,32 @@
                 Expenses
             </x-layout.sidebar-link>
         @endcan
+
+        @can('sajjat.view')
+            <x-layout.sidebar-link :href="route('sajjat.index')" :active="request()->routeIs('sajjat.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="6.5" width="18" height="13" rx="2" />
+                        <path d="M3 10.5h18" />
+                        <path d="M6.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 17.5 5v1.5" />
+                        <circle cx="16.5" cy="15" r="1" />
+                    </svg>
+                </x-slot:icon>
+                Sajjat
+            </x-layout.sidebar-link>
+        @endcan
+
+        @can('personal-ledger.manage')
+            <x-layout.sidebar-link :href="route('personal-ledger.index')" :active="request()->routeIs('personal-ledger.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 3.5h11.5A1.5 1.5 0 0 1 19 5v14.5a1 1 0 0 1-1 1H7a2 2 0 0 1-2-2V4.5a1 1 0 0 1 1-1z" />
+                        <path d="M5 18.5a2 2 0 0 1 2-2h12" />
+                        <path d="M9 8h6M9 11.5h4" />
+                    </svg>
+                </x-slot:icon>
+                Personal Ledger
+            </x-layout.sidebar-link>
+        @endcan
     </nav>
 </aside>

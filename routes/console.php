@@ -10,4 +10,5 @@ Artisan::command('inspire', function () {
 
 Schedule::command('report:unbilled-alerts')->dailyAt('09:00')->timezone('Asia/Dhaka');
 Schedule::command('report:daily')->dailyAt('20:00')->timezone('Asia/Dhaka');
+Schedule::command('report:sajjat')->dailyAt('20:00')->timezone('Asia/Dhaka');
 Schedule::command('report:agreement-deadlines')->dailyAt('09:00')->timezone('Asia/Dhaka');

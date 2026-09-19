@@ -3,12 +3,36 @@
 use App\Models\PersonalContact;
 use App\Models\PersonalPayment;
 use App\Models\PersonalSale;
+use App\Models\RolePermission;
 use App\Models\User;
+use App\Permission;
 use App\UserRole;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Livewire\Volt\Volt;
 
-test('accountants and staff cannot see or reach the personal ledger tab', function () {
+test('the personal ledger has its own sidebar page, reachable by super admins only', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $this->actingAs($superAdmin)
+        ->get(route('personal-ledger.index'))
+        ->assertOk()
+        ->assertSee('Personal Ledger');
+
+    $this->actingAs(User::factory()->accountant()->create())
+        ->get(route('personal-ledger.index'))
+        ->assertForbidden();
+
+    $this->actingAs(User::factory()->staff()->create())
+        ->get(route('personal-ledger.index'))
+        ->assertForbidden();
+});
+
+test('the old settings personal-ledger tab link redirects to the new page', function () {
+    $this->actingAs(User::factory()->create(['role' => UserRole::SuperAdmin]))
+        ->get('/settings?tab=personal-ledger')
+        ->assertRedirect(route('personal-ledger.index'));
+});
+
+test('accountants and staff cannot see or reach the personal ledger', function () {
     $accountant = User::factory()->accountant()->create();
     $this->actingAs($accountant);
 
@@ -191,4 +215,43 @@ test('a sale cannot be recorded against another super admin\'s contact', functio
         ->set('sale_amount', '500')
         ->call('saveSale')
         ->assertHasErrors(['sale_contact_id']);
+});
+
+test('the personal ledger appears in the roles grid and can be ticked for staff and accountants', function () {
+    $superAdmin = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $staff = User::factory()->staff()->create();
+    $accountant = User::factory()->accountant()->create();
+
+    $this->actingAs($staff)->get(route('personal-ledger.index'))->assertForbidden();
+
+    $this->actingAs($superAdmin);
+
+    Volt::test('settings.role-permissions-manager')
+        ->assertSee('Personal Ledger')
+        ->assertSee('Sajjat')
+        ->set('staffGrants.'.Permission::PersonalLedgerManage->name, true)
+        ->call('saveStaff')
+        ->assertHasNoErrors();
+
+    $this->actingAs($staff->fresh())->get(route('personal-ledger.index'))->assertOk();
+    $this->actingAs($accountant->fresh())->get(route('personal-ledger.index'))->assertForbidden();
+
+    $this->actingAs($superAdmin);
+    Volt::test('settings.role-permissions-manager')
+        ->set('staffGrants.'.Permission::PersonalLedgerManage->name, false)
+        ->call('saveStaff');
+
+    $this->actingAs($staff->fresh())->get(route('personal-ledger.index'))->assertForbidden();
+});
+
+test('a role granted the personal ledger sees the sidebar link and only its own contacts', function () {
+    $owner = User::factory()->create(['role' => UserRole::SuperAdmin]);
+    $staff = User::factory()->staff()->create();
+    RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::PersonalLedgerManage->value]);
+    PersonalContact::create(['user_id' => $owner->id, 'name' => 'Owner Contact']);
+
+    $this->actingAs($staff)
+        ->get(route('personal-ledger.index'))
+        ->assertOk()
+        ->assertDontSee('Owner Contact');
 });

@@ -19,16 +19,26 @@ Route::view('/', 'home')->name('home');
 // /livewire/livewire.js (hit this exact bug during the aaPanel deploy).
 // storage:link is safe to re-run — Artisan::call swallows its "link
 // already exists" failure as a normal non-zero exit rather than throwing.
+// It CAN still throw a fatal Error where the host disables both symlink()
+// and exec() (aaPanel does), which used to 500 this whole route before
+// config:cache/view:cache ran — so it's isolated and reported instead.
 Route::get('system/clear', function () {
     Artisan::call('config:clear');
     Artisan::call('route:clear');
     Artisan::call('view:clear');
     Artisan::call('cache:clear');
-    Artisan::call('storage:link');
+
+    try {
+        Artisan::call('storage:link');
+        $storageLink = 'storage:link ran.';
+    } catch (Throwable $e) {
+        $storageLink = 'storage:link FAILED ('.$e->getMessage().') — create the symlink manually over SSH: ln -s ../storage/app/public public/storage';
+    }
+
     Artisan::call('config:cache');
     Artisan::call('view:cache');
 
-    return "Cache cleared and re-cached (config, view), storage:link ran.\nRoute cache intentionally left cleared, not rebuilt — running route:cache breaks Livewire's asset route on this app.";
+    return "Cache cleared and re-cached (config, view). {$storageLink}\nRoute cache intentionally left cleared, not rebuilt — running route:cache breaks Livewire's asset route on this app.";
 })->name('system.refresh');
 
 // No permission gate here on purpose — this is the hardcoded post-login
@@ -177,6 +187,16 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('expenses', fn () => view('expenses.index'))
         ->middleware('can:expenses.view')
         ->name('expenses.index');
+
+    Route::get('sajjat', fn () => view('sajjat.index'))
+        ->middleware('can:sajjat.view')
+        ->name('sajjat.index');
+
+    // Super Admin only via a hard gate, never a grantable permission — see
+    // AppServiceProvider. Used to live as a Settings tab.
+    Route::get('personal-ledger', fn () => view('personal-ledger.index'))
+        ->middleware('can:personal-ledger.manage')
+        ->name('personal-ledger.index');
 });
 
 require __DIR__.'/auth.php';
