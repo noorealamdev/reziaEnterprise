@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\NewspaperPayment;
 use App\Models\SajjatTransaction;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -220,8 +221,28 @@ new class extends Component
         $this->dispatch('open-modal', 'sajjat-form');
     }
 
+    /**
+     * An expense created by a newspaper payment is managed from the
+     * Newspapers page (deleting the payment refunds the wallet) — changing
+     * it here would leave the two out of step.
+     */
+    private function isNewspaperPayment(int $transactionId): bool
+    {
+        if (! NewspaperPayment::where('sajjat_transaction_id', $transactionId)->exists()) {
+            return false;
+        }
+
+        $this->notify('This expense is a newspaper payment — change or delete it from the Newspapers page.', 'error');
+
+        return true;
+    }
+
     public function startEdit(int $transactionId): void
     {
+        if ($this->isNewspaperPayment($transactionId)) {
+            return;
+        }
+
         $transaction = SajjatTransaction::findOrFail($transactionId);
         $this->editingId = $transaction->id;
         $this->type = $transaction->type;
@@ -266,6 +287,10 @@ new class extends Component
 
     public function confirmDelete(int $transactionId): void
     {
+        if ($this->isNewspaperPayment($transactionId)) {
+            return;
+        }
+
         $this->confirmingDeleteId = $transactionId;
         $this->dispatch('open-modal', 'confirm-sajjat-deletion');
     }
@@ -274,7 +299,7 @@ new class extends Component
     {
         Gate::authorize('sajjat.modify');
 
-        if ($this->confirmingDeleteId) {
+        if ($this->confirmingDeleteId && ! $this->isNewspaperPayment($this->confirmingDeleteId)) {
             SajjatTransaction::destroy($this->confirmingDeleteId);
         }
 
@@ -289,9 +314,9 @@ new class extends Component
      * for — a flash can be lost when another request from the same session
      * (the toast poll itself) overlaps the save, so the alert never showed.
      */
-    private function notify(string $message): void
+    private function notify(string $message, string $type = 'success'): void
     {
-        $this->dispatch('toast', message: $message, type: 'success');
+        $this->dispatch('toast', message: $message, type: $type);
     }
 
     public function with(): array
@@ -311,7 +336,7 @@ new class extends Component
         $topUpsInView = (float) (clone $query)->where('type', SajjatTransaction::TYPE_TOP_UP)->sum('amount');
         $spentInView = (float) (clone $query)->where('type', SajjatTransaction::TYPE_EXPENSE)->sum('amount');
 
-        // Balances are always all-time — how much Sajjat has on hand right
+        // Balances are always all-time — how much Sazzad has on hand right
         // now doesn't depend on which month is being looked at.
         $balances = SajjatTransaction::balances();
 
@@ -343,7 +368,12 @@ new class extends Component
 
 <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-        <h2 class="text-base font-semibold text-slate-900 dark:text-white">Sajjat — Daily Spending</h2>
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white">Wallet</span>
+            @can('sajjat.newspapers.view')
+                <a href="{{ route('sajjat.newspapers') }}" wire:navigate class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">Newspapers</a>
+            @endcan
+        </div>
         <div class="flex flex-wrap items-center gap-2">
             @can('sajjat.create')
                 <x-secondary-button type="button" wire:click="startTopUp">
@@ -357,7 +387,7 @@ new class extends Component
     </div>
 
     <p class="text-xs text-slate-500 dark:text-slate-400">
-        Money given to Sajjat by bKash or cash, and what he spends of it each day. Each wallet's balance is
+        Money given to Sazzad by bKash or cash, and what he spends of it each day. Each wallet's balance is
         everything topped up into it minus everything spent from it.
     </p>
 
@@ -481,7 +511,7 @@ new class extends Component
         </div>
     @empty
         <x-empty-state
-            :title="$availableYears->isNotEmpty() ? 'No entries match these filters' : 'Nothing recorded for Sajjat yet'"
+            :title="$availableYears->isNotEmpty() ? 'No entries match these filters' : 'Nothing recorded for Sazzad yet'"
             :message="$availableYears->isNotEmpty() ? 'Try different filters — or clear them above.' : 'Start by topping up his bKash or cash, then record what he spends.'"
         >
             @can('sajjat.create')
@@ -500,7 +530,7 @@ new class extends Component
         <form wire:submit="save" class="space-y-6 p-6">
             <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
                 @if ($type === \App\Models\SajjatTransaction::TYPE_TOP_UP)
-                    {{ $editingId ? 'Edit Top-up' : 'Top Up Sajjat' }}
+                    {{ $editingId ? 'Edit Top-up' : 'Top Up Sazzad' }}
                 @else
                     {{ $editingId ? 'Edit Expense' : 'Record Expense' }}
                 @endif

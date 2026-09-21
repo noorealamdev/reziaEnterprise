@@ -188,9 +188,13 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:expenses.view')
         ->name('expenses.index');
 
-    Route::get('sajjat', fn () => view('sajjat.index'))
+    Route::get('sazzad', fn () => view('sajjat.index'))
         ->middleware('can:sajjat.view')
         ->name('sajjat.index');
+
+    Route::get('sazzad/newspapers', fn () => view('sajjat.newspapers'))
+        ->middleware('can:sajjat.newspapers.view')
+        ->name('sajjat.newspapers');
 
     // Super Admin only via a hard gate, never a grantable permission — see
     // AppServiceProvider. Used to live as a Settings tab.

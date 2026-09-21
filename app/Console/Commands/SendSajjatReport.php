@@ -24,14 +24,14 @@ class SendSajjatReport extends Command
      *
      * @var string
      */
-    protected $description = "Email Sajjat's daily wallet report (today's activity and balances) to every active Super Admin";
+    protected $description = "Email Sazzad's daily wallet report (today's activity and balances) to every active Super Admin";
 
     public function handle(): int
     {
-        // Nothing to report until Sajjat's ledger has been used at all —
+        // Nothing to report until Sazzad's ledger has been used at all —
         // an all-zero email every evening before then would just be noise.
         if (! SajjatTransaction::query()->exists()) {
-            $this->info('No Sajjat entries recorded yet — skipping Sajjat report.');
+            $this->info('No Sazzad entries recorded yet — skipping Sazzad report.');
 
             return self::SUCCESS;
         }
@@ -39,7 +39,7 @@ class SendSajjatReport extends Command
         $recipients = User::where('role', UserRole::SuperAdmin)->where('is_active', true)->get();
 
         if ($recipients->isEmpty()) {
-            $this->info('No active Super Admins to notify — skipping Sajjat report.');
+            $this->info('No active Super Admins to notify — skipping Sazzad report.');
 
             return self::SUCCESS;
         }
@@ -51,7 +51,7 @@ class SendSajjatReport extends Command
             Mail::to($recipient)->send(new SajjatReportMail($date, $data));
         }
 
-        $this->info("Sajjat report sent to {$recipients->count()} Super Admin(s).");
+        $this->info("Sazzad report sent to {$recipients->count()} Super Admin(s).");
 
         return self::SUCCESS;
     }

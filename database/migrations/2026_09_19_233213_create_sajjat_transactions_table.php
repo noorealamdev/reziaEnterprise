@@ -14,11 +14,11 @@ return new class extends Migration
         Schema::create('sajjat_transactions', function (Blueprint $table) {
             $table->id();
             $table->date('transaction_date');
-            // 'top_up' = money the client gives Sajjat, 'expense' = money he
+            // 'top_up' = money the client gives Sazzad, 'expense' = money he
             // spends. One ledger for both, so each wallet's balance is simply
             // top-ups minus expenses — computed live, never stored.
             $table->string('type', 20);
-            // Which of Sajjat's two wallets the money moved through.
+            // Which of Sazzad's two wallets the money moved through.
             $table->string('wallet', 20);
             $table->decimal('amount', 12, 2);
             $table->string('description');

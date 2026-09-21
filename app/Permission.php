@@ -59,6 +59,10 @@ enum Permission: string
     case SajjatCreate = 'sajjat.create';
     case SajjatModify = 'sajjat.modify';
 
+    case SajjatNewspapersView = 'sajjat.newspapers.view';
+    case SajjatNewspapersCreate = 'sajjat.newspapers.create';
+    case SajjatNewspapersModify = 'sajjat.newspapers.modify';
+
     case PersonalLedgerManage = 'personal-ledger.manage';
 
     case SettingsManage = 'settings.manage';
@@ -102,9 +106,12 @@ enum Permission: string
             self::ExpensesView => 'View expenses',
             self::ExpensesCreate => 'Record expenses',
             self::ExpensesModify => 'Edit / delete expenses',
-            self::SajjatView => 'View Sajjat wallet balances & ledger',
-            self::SajjatCreate => 'Record Sajjat top-ups & expenses',
-            self::SajjatModify => 'Edit / delete Sajjat entries',
+            self::SajjatView => 'View Sazzad wallet balances & ledger',
+            self::SajjatCreate => 'Record Sazzad top-ups & expenses',
+            self::SajjatModify => 'Edit / delete Sazzad entries',
+            self::SajjatNewspapersView => 'View Sazzad newspapers & their payments',
+            self::SajjatNewspapersCreate => 'Add newspapers & record newspaper payments',
+            self::SajjatNewspapersModify => 'Edit / delete newspapers & their payments',
             self::PersonalLedgerManage => 'Use the Personal Ledger (contacts, sales & payments)',
             self::SettingsManage => 'Manage company logo',
         };
@@ -128,7 +135,8 @@ enum Permission: string
             self::EmployeesView, self::EmployeesCreate, self::EmployeesModify,
             self::SalaryPaymentsCreate, self::SalaryPaymentsModify => 'Staff Salaries',
             self::ExpensesView, self::ExpensesCreate, self::ExpensesModify => 'Expenses',
-            self::SajjatView, self::SajjatCreate, self::SajjatModify => 'Sajjat',
+            self::SajjatView, self::SajjatCreate, self::SajjatModify,
+            self::SajjatNewspapersView, self::SajjatNewspapersCreate, self::SajjatNewspapersModify => 'Sazzad',
             self::PersonalLedgerManage => 'Personal Ledger',
             self::SettingsManage => 'Settings',
         };

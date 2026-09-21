@@ -8,7 +8,7 @@ use App\UserRole;
 use Livewire\Volt\Volt;
 
 test('guests are redirected to login', function () {
-    $this->get('/sajjat')->assertRedirect('/login');
+    $this->get('/sazzad')->assertRedirect('/login');
 });
 
 test('a top-up raises the chosen wallet and an expense lowers only the wallet it was paid from', function () {
@@ -140,7 +140,7 @@ test('a user with only sajjat.view sees the ledger but cannot add, edit or delet
     RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::SajjatView->value]);
     $entry = SajjatTransaction::factory()->create();
 
-    $this->actingAs($staff)->get('/sajjat')->assertOk();
+    $this->actingAs($staff)->get('/sazzad')->assertOk();
 
     Volt::test('sajjat.wallet-manager')
         ->assertDontSee('+ Record Expense')
@@ -157,7 +157,7 @@ test('a user with only sajjat.view sees the ledger but cannot add, edit or delet
 
 test('an accountant without the sajjat permissions is forbidden from the page', function () {
     $this->actingAs(User::factory()->accountant()->create())
-        ->get('/sajjat')
+        ->get('/sazzad')
         ->assertForbidden();
 });
 

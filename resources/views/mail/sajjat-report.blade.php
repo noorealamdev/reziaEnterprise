@@ -1,5 +1,5 @@
 <x-mail::message>
-# Sajjat Report — {{ $date->format('M j, Y') }}
+# Sazzad Report — {{ $date->format('M j, Y') }}
 
 ## Balance available now
 
@@ -14,7 +14,7 @@
 
 @foreach ($wallets as $key => $label)
 @if ($balances[$key] < 0)
-**Overspent:** {{ $label }} is {{ number_format(abs($balances[$key]), 2) }} below zero — Sajjat has spent more than was topped up.
+**Overspent:** {{ $label }} is {{ number_format(abs($balances[$key]), 2) }} below zero — Sazzad has spent more than was topped up.
 
 @endif
 @endforeach
@@ -44,7 +44,7 @@ Topped up **{{ number_format($todayTopUps, 2) }}** · Spent **{{ number_format($
 </x-mail::table>
 
 <x-mail::button :url="route('sajjat.index')">
-Open Sajjat
+Open Sazzad
 </x-mail::button>
 
 Thanks,<br>

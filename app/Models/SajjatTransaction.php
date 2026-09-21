@@ -49,7 +49,7 @@ class SajjatTransaction extends Model
     }
 
     /**
-     * What Sajjat has left in each wallet: everything topped up into it
+     * What Sazzad has left in each wallet: everything topped up into it
      * minus everything spent from it, across all time. Computed live rather
      * than stored, same anti-drift principle as every other balance here.
      * Can go negative if he spends more than was given.

@@ -228,7 +228,7 @@ test('the personal ledger appears in the roles grid and can be ticked for staff 
 
     Volt::test('settings.role-permissions-manager')
         ->assertSee('Personal Ledger')
-        ->assertSee('Sajjat')
+        ->assertSee('Sazzad')
         ->set('staffGrants.'.Permission::PersonalLedgerManage->name, true)
         ->call('saveStaff')
         ->assertHasNoErrors();

@@ -11,6 +11,11 @@ test('login screen can be rendered', function () {
         ->assertSeeVolt('pages.auth.login');
 });
 
+test('login screen has a show/hide password toggle', function () {
+    Volt::test('pages.auth.login')
+        ->assertSeeHtml("x-bind:aria-label=\"show ? 'Hide password' : 'Show password'\"");
+});
+
 test('users can authenticate using the login screen', function () {
     $user = User::factory()->create();
 
