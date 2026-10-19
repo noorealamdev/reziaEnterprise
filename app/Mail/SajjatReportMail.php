@@ -24,7 +24,7 @@ class SajjatReportMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Sazzad Report — '.$this->date->format('M j, Y'),
+            subject: 'Sajjat Report — '.$this->date->format('M j, Y'),
         );
     }
 

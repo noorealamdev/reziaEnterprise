@@ -18,6 +18,7 @@ class Invoice extends Model
         'status',
         'vat_percent',
         'manual_amount',
+        'manual_cost_amount',
         'manual_description',
         'paid_at',
         'remarks',
@@ -36,6 +37,7 @@ class Invoice extends Model
             'paid_at' => 'date',
             'vat_percent' => 'decimal:2',
             'manual_amount' => 'decimal:2',
+            'manual_cost_amount' => 'decimal:2',
         ];
     }
 

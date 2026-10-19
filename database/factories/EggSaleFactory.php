@@ -28,7 +28,7 @@ class EggSaleFactory extends Factory
             'sale_amount' => round($quantity * $saleRate, 2),
             'egg_buyer_id' => EggBuyer::factory(),
             'payment_status' => 'cash',
-            'in_charge' => null,
+            'egg_in_charge_id' => null,
             'remarks' => null,
             'created_by' => null,
         ];

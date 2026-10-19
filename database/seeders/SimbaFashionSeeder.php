@@ -8,6 +8,7 @@ use App\Models\Invoice;
 use App\Models\InvoicePayment;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
+use App\Models\TiffinDepartment;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Carbon;
 
@@ -61,8 +62,9 @@ class SimbaFashionSeeder extends Seeder
      */
     public function run(): void
     {
-        $simba = Company::where('code', 'SIMBA')->first();
+        $simba = Company::where('code', 'SFL')->first();
         $category = ServiceCategory::where('name', 'Daily Basic Labour')->first();
+        $unit = TiffinDepartment::where('name', 'Simba Unit-01')->first();
 
         if (! $simba || ! $category) {
             return;
@@ -82,21 +84,23 @@ class SimbaFashionSeeder extends Seeder
         $purchaseA = $this->createPurchase($simba, 'SF-2026-01', 'Garment Lot — Batch 1', 200000, $june->copy()->day(1));
         $purchaseB = $this->createPurchase($simba, 'SF-2026-02', 'Garment Lot — Batch 2', 300000, $july->copy()->day(1));
 
-        // --- Bills: what Simba owes Rezia for Tiffin/labour ---------------
+        // --- Bills: what Simba owes Rezia for Tiffin/labour, all for
+        // Simba Unit-01 — matching the real invoice number convention
+        // (RE/SFL/{category code}/Bill{n}/{month}{year}). ------------------
 
-        $bill1 = $this->createInvoice($simba, $category, $june, 'SIMBA-DiBL-'.$june->format('Ym'), [
+        $bill1 = $this->createInvoice($simba, $category, $unit, $june, 'RE/SFL/DBL/Bill1/'.$june->format('mY'), [
             ['day' => 5, 'quantity' => 10, 'cost_rate' => 4000, 'bill_rate' => 8000],
         ]);
-        $bill2 = $this->createInvoice($simba, $category, $june, 'SIMBA-DiBL-'.$june->format('Ym').'-2', [
+        $bill2 = $this->createInvoice($simba, $category, $unit, $june, 'RE/SFL/DBL/Bill2/'.$june->format('mY'), [
             ['day' => 20, 'quantity' => 10, 'cost_rate' => 6000, 'bill_rate' => 12000],
         ]);
-        $bill3 = $this->createInvoice($simba, $category, $july, 'SIMBA-DiBL-'.$july->format('Ym'), [
+        $bill3 = $this->createInvoice($simba, $category, $unit, $july, 'RE/SFL/DBL/Bill3/'.$july->format('mY'), [
             ['day' => 5, 'quantity' => 15, 'cost_rate' => 6000, 'bill_rate' => 10000],
         ]);
-        $bill4 = $this->createInvoice($simba, $category, $august, 'SIMBA-DiBL-'.$august->format('Ym'), [
+        $bill4 = $this->createInvoice($simba, $category, $unit, $august, 'RE/SFL/DBL/Bill4/'.$august->format('mY'), [
             ['day' => 5, 'quantity' => 9, 'cost_rate' => 6000, 'bill_rate' => 10000],
         ]);
-        $bill5 = $this->createInvoice($simba, $category, $september, 'SIMBA-DiBL-'.$september->format('Ym'), [
+        $bill5 = $this->createInvoice($simba, $category, $unit, $september, 'RE/SFL/DBL/Bill5/'.$september->format('mY'), [
             ['day' => 5, 'quantity' => 6, 'cost_rate' => 6000, 'bill_rate' => 10000],
         ]);
 
@@ -150,7 +154,7 @@ class SimbaFashionSeeder extends Seeder
     /**
      * @param  array<int, array{day: int, quantity: float, cost_rate: float, bill_rate: float}>  $entries
      */
-    private function createInvoice(Company $simba, ServiceCategory $category, Carbon $periodStart, string $invoiceNumber, array $entries): Invoice
+    private function createInvoice(Company $simba, ServiceCategory $category, ?TiffinDepartment $unit, Carbon $periodStart, string $invoiceNumber, array $entries): Invoice
     {
         $periodEnd = $periodStart->copy()->endOfMonth();
 
@@ -170,7 +174,9 @@ class SimbaFashionSeeder extends Seeder
             JobEntry::create([
                 'company_id' => $simba->id,
                 'service_category_id' => $category->id,
-                'tiffin_department_id' => null,
+                // Simba bills Daily Basic Labour separately per unit —
+                // every bill here is for Simba Unit-01.
+                'tiffin_department_id' => $unit?->id,
                 'supply_type' => 'Daily Basic Labour',
                 'entry_date' => $periodStart->copy()->day($entry['day'])->toDateString(),
                 'quantity' => $entry['quantity'],

@@ -23,6 +23,7 @@ class JobEntry extends Model
         'buyer',
         'style',
         'floor',
+        'collected_from_company_id',
         'challan_no',
         'unit_label',
         'company_adv_payment',
@@ -80,6 +81,11 @@ class JobEntry extends Model
     public function tiffinDepartment(): BelongsTo
     {
         return $this->belongsTo(TiffinDepartment::class);
+    }
+
+    public function collectedFromCompany(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'collected_from_company_id');
     }
 
     public function invoice(): BelongsTo

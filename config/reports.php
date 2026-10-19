@@ -56,4 +56,31 @@ return [
 
     'agreement_deadline_resend_days' => (int) env('AGREEMENT_DEADLINE_RESEND_DAYS', 7),
 
+    /*
+    |--------------------------------------------------------------------
+    | License Deadline Alert Days
+    |--------------------------------------------------------------------
+    |
+    | A company license is flagged as "Expiring Soon" — and included in
+    | the deadline alert email — once its expiry date is within this many
+    | days, giving the office enough lead time to renew it before it
+    | lapses.
+    |
+    */
+
+    'license_deadline_alert_days' => (int) env('LICENSE_DEADLINE_ALERT_DAYS', 30),
+
+    /*
+    |--------------------------------------------------------------------
+    | License Deadline Resend Days
+    |--------------------------------------------------------------------
+    |
+    | Once a license's deadline has been alerted on, it won't be alerted
+    | on again until this many days have passed — avoids a daily email
+    | for the same license while it's still sitting unrenewed.
+    |
+    */
+
+    'license_deadline_resend_days' => (int) env('LICENSE_DEADLINE_RESEND_DAYS', 7),
+
 ];

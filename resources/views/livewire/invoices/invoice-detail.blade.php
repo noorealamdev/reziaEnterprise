@@ -268,7 +268,7 @@ new class extends Component
         $entries = $isManual
             ? collect()
             : $this->invoice->jobEntries()
-                ->with('tiffinDepartment')
+                ->with(['tiffinDepartment', 'collectedFromCompany'])
                 ->orderBy('entry_date')
                 ->get();
 
@@ -289,7 +289,13 @@ new class extends Component
             // Wash Worker, ...), quantity/rate driven by whichever item
             // actually carries the bill (Egg — same math as the Daily Summary
             // screen), instead of a separate row per department.
-            $rows = $entries->first()?->tiffin_department_id
+            //
+            // tiffin_department_id is also reused for Simba Fashion's
+            // per-unit Daily Basic Labour entries, so this must key off the
+            // invoice's actual category, not just whether entries carry a
+            // department/unit — a Daily Basic Labour invoice has no Egg
+            // concept and must still show one row per entry.
+            $rows = ($entries->first()?->tiffin_department_id && $this->invoice->serviceCategory->name === 'Tiffin')
                 ? $entries->groupBy(fn ($e) => $e->entry_date->toDateString())
                     ->map(function ($batch) {
                         $first = $batch->first();
@@ -324,6 +330,7 @@ new class extends Component
                         $entry->buyer,
                         $entry->style ? "Style {$entry->style}" : null,
                         $entry->floor,
+                        $entry->collected_from_company_id ? "Collected from {$entry->collectedFromCompany->name}" : null,
                         $entry->challan_no ? "Challan {$entry->challan_no}" : null,
                     ])->filter()->implode(' — '),
                     'quantity' => (float) $entry->quantity,
@@ -332,10 +339,32 @@ new class extends Component
                 ])->values();
         }
 
-        // No cost data exists for a manually-entered past bill — an
-        // accepted gap, not something to fake.
-        $totalCostAmount = $entries->sum('cost_amount');
-        $totalProfitAmount = $entries->sum('profit_amount');
+        // Simba Fashion's per-unit Daily Basic Labour invoices are already
+        // scoped to a single unit at generation time (every entry on this
+        // invoice shares the same tiffin_department_id) — shown on the
+        // document itself, since otherwise there's no way to tell which of
+        // the 4 units a given invoice is for. Tiffin already identifies its
+        // department per row, so this is left out there to avoid changing
+        // an already-working document.
+        $invoiceUnit = (! $isManual && $this->invoice->serviceCategory->name !== 'Tiffin')
+            ? $entries->first()?->tiffinDepartment?->name
+            : null;
+
+        // A manually-entered past bill has no job entries to sum cost/profit
+        // from — they come from its own typed-in Total Cost instead, when
+        // one was recorded. Left at zero for an older past bill with no
+        // Total Cost on file — an accepted gap, not something to fake.
+        //
+        // Shipment Tiffin Cost (Loading Unloading only) is folded in here so
+        // Total Cost + Total Profit always reconciles to the bill total —
+        // it's never billed to the factory, so it was already deducted from
+        // profit_amount underneath; this just surfaces it in Total Cost too.
+        $totalCostAmount = $isManual
+            ? (float) ($this->invoice->manual_cost_amount ?? 0)
+            : (float) $entries->sum('cost_amount') + (float) $entries->sum('shipment_tiffin_cost');
+        $totalProfitAmount = $isManual
+            ? ($this->invoice->manual_cost_amount !== null ? (float) $this->invoice->subtotal - (float) $this->invoice->manual_cost_amount : 0.0)
+            : (float) $entries->sum('profit_amount');
 
         $total = $this->invoice->subtotal;
         $vatAmount = $this->invoice->vat_percent ? round($total * (float) $this->invoice->vat_percent / 100, 2) : null;
@@ -385,6 +414,7 @@ new class extends Component
         return [
             'rows' => $rows,
             'unitLabel' => $this->invoice->serviceCategory->unit_label,
+            'invoiceUnit' => $invoiceUnit,
             'totalCostAmount' => $totalCostAmount,
             'totalProfitAmount' => $totalProfitAmount,
             'total' => $total,
@@ -420,7 +450,13 @@ new class extends Component
                     <x-badge color="slate">Past Bill</x-badge>
                 @endif
             </h2>
-            <p class="text-sm text-slate-500 dark:text-slate-400">{{ $invoice->serviceCategory->name }} · {{ $invoice->period_start->format('F Y') }}</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                {{ $invoice->serviceCategory->name }}
+                @if ($invoiceUnit)
+                    · {{ $invoiceUnit }}
+                @endif
+                · {{ $invoice->period_start->format('F Y') }}
+            </p>
             @if ($invoice->manual_description)
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ $invoice->manual_description }}</p>
             @endif
@@ -617,7 +653,7 @@ new class extends Component
         </div>
 
         <p class="mt-4 text-sm font-semibold text-slate-900 dark:text-white">
-            Sub: Bill For {{ $invoice->serviceCategory->name }} Month Of {{ $invoice->period_start->format('F Y') }}.
+            Sub: Bill For {{ $invoice->serviceCategory->name }}{{ $invoiceUnit ? ' ('.$invoiceUnit.')' : '' }} Month Of {{ $invoice->period_start->format('F Y') }}.
         </p>
 
         <div class="mt-4 overflow-x-auto">

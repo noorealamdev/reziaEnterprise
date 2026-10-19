@@ -2,6 +2,7 @@
 
 use App\Models\Company;
 use App\Models\JobEntry;
+use App\Models\ServiceCategory;
 use App\Models\TiffinDepartment;
 use App\Models\TiffinItemPurchase;
 use Illuminate\Support\Facades\DB;
@@ -46,8 +47,14 @@ new class extends Component
         $this->department = $department;
         $this->date = $date;
 
+        // tiffin_department_id is also reused for Simba Fashion's per-unit
+        // Daily Basic Labour entries — this batch form must only ever pull
+        // in actual Tiffin entries sharing the same company/unit/day, never
+        // a Daily Basic Labour entry that happens to share the same unit,
+        // or save() below would zero out its bill_rate as a non-Egg item.
         $entries = JobEntry::where('company_id', $company->id)
             ->where('tiffin_department_id', $department->id)
+            ->where('service_category_id', ServiceCategory::where('name', 'Tiffin')->value('id'))
             ->whereDate('entry_date', $date)
             ->orderBy('id')
             ->get();
@@ -98,6 +105,7 @@ new class extends Component
         return JobEntry::where('company_id', $this->company->id)
             ->whereDate('entry_date', $this->entry_date)
             ->where('supply_type', 'Egg')
+            ->where('service_category_id', ServiceCategory::where('name', 'Tiffin')->value('id'))
             ->whereNotNull('tiffin_department_id')
             ->with('tiffinDepartment')
             ->get()

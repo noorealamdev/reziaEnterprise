@@ -2,6 +2,8 @@
 
 use App\Models\EggBuyer;
 use App\Models\EggBuyerPayment;
+use App\Models\EggInCharge;
+use App\Models\EggInChargeTransaction;
 use App\Models\EggSale;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Carbon;
@@ -43,6 +45,12 @@ new class extends Component
     #[Url(as: 'summary_month', history: true)]
     public string $summaryMonthFilter = '';
 
+    #[Url(as: 'ic_summary_year', history: true)]
+    public string $inChargeSummaryYearFilter = '';
+
+    #[Url(as: 'ic_summary_month', history: true)]
+    public string $inChargeSummaryMonthFilter = '';
+
     public ?int $editingSaleId = null;
 
     public string $sale_date = '';
@@ -55,7 +63,7 @@ new class extends Component
 
     public string $payment_status = 'cash';
 
-    public ?string $in_charge = null;
+    public ?int $egg_in_charge_id = null;
 
     public ?string $sale_remarks = null;
 
@@ -85,6 +93,34 @@ new class extends Component
 
     public ?string $edit_buyer_phone = null;
 
+    /** Revealed by "+ New" inside the sale form, next to the In-Charge dropdown. */
+    public bool $showNewInChargeFields = false;
+
+    public ?string $new_in_charge_name = null;
+
+    public ?string $new_in_charge_phone = null;
+
+    /** Revealed by "Edit" next to the In-Charge dropdown, same inline pattern as Buyer. */
+    public bool $showEditInChargeFields = false;
+
+    public ?string $edit_in_charge_name = null;
+
+    public ?string $edit_in_charge_phone = null;
+
+    public ?int $transactingInChargeId = null;
+
+    public string $transactionType = 'expense';
+
+    public ?string $transactionAmount = null;
+
+    public string $transactionDate = '';
+
+    public ?string $transactionDescription = null;
+
+    public ?string $transactionRemarks = null;
+
+    public ?int $confirmingDeleteInChargeTransactionId = null;
+
     /**
      * Captured once in mount() — a manually-built LengthAwarePaginator needs
      * an explicit 'path', and request()->url() would otherwise resolve to
@@ -96,6 +132,21 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
+
+        if ($this->saleYearFilter === '' && $this->saleRangeFilter === '') {
+            $this->saleYearFilter = (string) now()->year;
+            $this->saleMonthFilter = (string) now()->month;
+        }
+
+        if ($this->summaryYearFilter === '') {
+            $this->summaryYearFilter = (string) now()->year;
+            $this->summaryMonthFilter = (string) now()->month;
+        }
+
+        if ($this->inChargeSummaryYearFilter === '') {
+            $this->inChargeSummaryYearFilter = (string) now()->year;
+            $this->inChargeSummaryMonthFilter = (string) now()->month;
+        }
     }
 
     public function switchView(string $view): void
@@ -137,6 +188,11 @@ new class extends Component
         $this->summaryMonthFilter = '';
     }
 
+    public function updatingInChargeSummaryYearFilter(): void
+    {
+        $this->inChargeSummaryMonthFilter = '';
+    }
+
     /**
      * Every #[Url]-bound property this component has, appended onto both
      * paginators' page links — without this, clicking "Next" (a plain
@@ -157,6 +213,8 @@ new class extends Component
             'in_charge' => $this->saleInChargeFilter,
             'summary_year' => $this->summaryYearFilter,
             'summary_month' => $this->summaryMonthFilter,
+            'ic_summary_year' => $this->inChargeSummaryYearFilter,
+            'ic_summary_month' => $this->inChargeSummaryMonthFilter,
         ], fn ($value) => $value !== '');
     }
 
@@ -168,7 +226,7 @@ new class extends Component
         $this->sale_rate = null;
         $this->egg_buyer_id = null;
         $this->payment_status = 'cash';
-        $this->in_charge = null;
+        $this->egg_in_charge_id = null;
         $this->sale_remarks = null;
         $this->showNewBuyerFields = false;
         $this->new_buyer_name = null;
@@ -176,6 +234,12 @@ new class extends Component
         $this->showEditBuyerFields = false;
         $this->edit_buyer_name = null;
         $this->edit_buyer_phone = null;
+        $this->showNewInChargeFields = false;
+        $this->new_in_charge_name = null;
+        $this->new_in_charge_phone = null;
+        $this->showEditInChargeFields = false;
+        $this->edit_in_charge_name = null;
+        $this->edit_in_charge_phone = null;
         $this->resetErrorBag();
         $this->dispatch('open-modal', 'egg-sale-form');
     }
@@ -193,7 +257,7 @@ new class extends Component
         // system, so an old paid sale still shows as Due here rather than
         // silently defaulting back to Cash.
         $this->payment_status = $sale->payment_status === 'paid' ? 'due' : $sale->payment_status;
-        $this->in_charge = $sale->in_charge;
+        $this->egg_in_charge_id = $sale->egg_in_charge_id;
         $this->sale_remarks = $sale->remarks;
         $this->showNewBuyerFields = false;
         $this->new_buyer_name = null;
@@ -201,6 +265,12 @@ new class extends Component
         $this->showEditBuyerFields = false;
         $this->edit_buyer_name = null;
         $this->edit_buyer_phone = null;
+        $this->showNewInChargeFields = false;
+        $this->new_in_charge_name = null;
+        $this->new_in_charge_phone = null;
+        $this->showEditInChargeFields = false;
+        $this->edit_in_charge_name = null;
+        $this->edit_in_charge_phone = null;
         $this->resetErrorBag();
         $this->dispatch('open-modal', 'egg-sale-form');
     }
@@ -267,6 +337,63 @@ new class extends Component
         $this->edit_buyer_phone = null;
     }
 
+    /**
+     * Creates an In-Charge person right from the sale form — same inline
+     * pattern as "+ New Buyer" above, for the same reason: the office
+     * usually only thinks to add someone while recording their first sale.
+     */
+    public function addInChargeInline(): void
+    {
+        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
+
+        $validated = $this->validate([
+            'new_in_charge_name' => ['required', 'string', 'max:255', Rule::unique('egg_in_charges', 'name')],
+            'new_in_charge_phone' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $inCharge = EggInCharge::create([
+            'name' => trim($validated['new_in_charge_name']),
+            'phone' => $validated['new_in_charge_phone'] ? trim($validated['new_in_charge_phone']) : null,
+            'created_by' => auth()->id(),
+        ]);
+
+        $this->egg_in_charge_id = $inCharge->id;
+        $this->showNewInChargeFields = false;
+        $this->new_in_charge_name = null;
+        $this->new_in_charge_phone = null;
+    }
+
+    public function startEditInChargeInline(): void
+    {
+        if (! $this->egg_in_charge_id) {
+            return;
+        }
+
+        $inCharge = EggInCharge::find($this->egg_in_charge_id);
+        $this->edit_in_charge_name = $inCharge?->name;
+        $this->edit_in_charge_phone = $inCharge?->phone;
+        $this->showEditInChargeFields = true;
+    }
+
+    public function saveInChargeInline(): void
+    {
+        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
+
+        $validated = $this->validate([
+            'edit_in_charge_name' => ['required', 'string', 'max:255', Rule::unique('egg_in_charges', 'name')->ignore($this->egg_in_charge_id)],
+            'edit_in_charge_phone' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        EggInCharge::whereKey($this->egg_in_charge_id)->update([
+            'name' => trim($validated['edit_in_charge_name']),
+            'phone' => $validated['edit_in_charge_phone'] ? trim($validated['edit_in_charge_phone']) : null,
+        ]);
+
+        $this->showEditInChargeFields = false;
+        $this->edit_in_charge_name = null;
+        $this->edit_in_charge_phone = null;
+    }
+
     public function saveSale(): void
     {
         Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
@@ -277,7 +404,7 @@ new class extends Component
             'sale_rate' => ['required', 'numeric', 'min:0'],
             'egg_buyer_id' => ['nullable', 'integer', 'exists:egg_buyers,id'],
             'payment_status' => ['required', Rule::in(['cash', 'due'])],
-            'in_charge' => ['nullable', 'string', 'max:255'],
+            'egg_in_charge_id' => ['nullable', 'integer', 'exists:egg_in_charges,id'],
             'sale_remarks' => ['nullable', 'string', 'max:2000'],
         ], [], [
             'sale_quantity' => 'quantity',
@@ -291,7 +418,7 @@ new class extends Component
             'sale_amount' => round((float) $validated['sale_quantity'] * (float) $validated['sale_rate'], 2),
             'egg_buyer_id' => $validated['egg_buyer_id'],
             'payment_status' => $validated['payment_status'],
-            'in_charge' => $validated['in_charge'] ? trim($validated['in_charge']) : null,
+            'egg_in_charge_id' => $validated['egg_in_charge_id'],
             'remarks' => $validated['sale_remarks'] ? trim($validated['sale_remarks']) : null,
         ];
 
@@ -418,19 +545,113 @@ new class extends Component
         $this->activeView = 'sales';
     }
 
+    /**
+     * Opens the transaction form for one In-Charge person — not pre-filled
+     * with an amount, unlike "Record Payment" above, since this logs a new
+     * expense/remittance event rather than settling one known figure.
+     */
+    public function startRecordInChargeTransaction(int $eggInChargeId): void
+    {
+        $this->transactingInChargeId = $eggInChargeId;
+        $this->transactionType = 'expense';
+        $this->transactionAmount = null;
+        $this->transactionDate = now()->toDateString();
+        $this->transactionDescription = null;
+        $this->transactionRemarks = null;
+        $this->resetErrorBag();
+        $this->dispatch('open-modal', 'egg-in-charge-transaction-form');
+    }
+
+    /**
+     * Records money an In-Charge person spent on something else ('expense')
+     * or cash they've actually handed back to the office ('remittance') —
+     * either way it reduces what they owe. No cap against what they
+     * currently owe (unlike a buyer payment) — the same "can go negative"
+     * philosophy as the Sajjat wallet ledger, since a real-world expense
+     * can legitimately be recorded before all of today's cash sales are
+     * entered.
+     */
+    public function recordInChargeTransaction(): void
+    {
+        Gate::authorize('egg_sales.modify');
+
+        $validated = $this->validate([
+            'transactionType' => ['required', Rule::in([EggInChargeTransaction::TYPE_EXPENSE, EggInChargeTransaction::TYPE_REMITTANCE])],
+            'transactionAmount' => ['required', 'numeric', 'min:0.01'],
+            'transactionDate' => ['required', 'date'],
+            'transactionDescription' => ['required', 'string', 'max:255'],
+            'transactionRemarks' => ['nullable', 'string', 'max:2000'],
+        ]);
+
+        EggInChargeTransaction::create([
+            'egg_in_charge_id' => $this->transactingInChargeId,
+            'type' => $validated['transactionType'],
+            'transaction_date' => $validated['transactionDate'],
+            'amount' => (float) $validated['transactionAmount'],
+            'description' => trim($validated['transactionDescription']),
+            'remarks' => $validated['transactionRemarks'] ? trim($validated['transactionRemarks']) : null,
+            'created_by' => auth()->id(),
+        ]);
+
+        $this->transactionAmount = null;
+        $this->transactionDescription = null;
+        $this->transactionRemarks = null;
+        $this->dispatch('close-modal', 'egg-in-charge-transaction-form');
+        session()->flash('status', $validated['transactionType'] === EggInChargeTransaction::TYPE_EXPENSE ? 'Expense recorded.' : 'Remittance recorded.');
+    }
+
+    public function confirmDeleteInChargeTransaction(int $transactionId): void
+    {
+        $this->confirmingDeleteInChargeTransactionId = $transactionId;
+        $this->dispatch('close-modal', 'egg-in-charge-transaction-form');
+        $this->dispatch('open-modal', 'confirm-egg-in-charge-transaction-deletion');
+    }
+
+    public function deleteInChargeTransaction(): void
+    {
+        Gate::authorize('egg_sales.modify');
+
+        if ($this->confirmingDeleteInChargeTransactionId) {
+            EggInChargeTransaction::whereKey($this->confirmingDeleteInChargeTransactionId)->delete();
+        }
+
+        $this->confirmingDeleteInChargeTransactionId = null;
+        $this->dispatch('close-modal', 'confirm-egg-in-charge-transaction-deletion');
+        session()->flash('status', 'Transaction removed.');
+    }
+
+    /**
+     * Jumps to the Sales tab filtered to exactly this In-Charge person and
+     * period — the itemized cash sales behind one ledger row, one click
+     * away, same pattern as "View" on the Buyer Summary.
+     */
+    public function viewInChargeSales(int $eggInChargeId): void
+    {
+        $this->saleInChargeFilter = (string) $eggInChargeId;
+        $this->saleYearFilter = $this->inChargeSummaryYearFilter;
+        $this->saleMonthFilter = $this->inChargeSummaryMonthFilter;
+        $this->saleRangeFilter = '';
+        $this->activeView = 'sales';
+    }
+
     public function with(): array
     {
         $monthOptions = collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]);
 
         return [
             'buyers' => EggBuyer::orderBy('name')->get(),
+            'inCharges' => EggInCharge::orderBy('name')->get(),
             'saleAmountPreview' => (is_numeric($this->sale_quantity) && is_numeric($this->sale_rate))
                 ? round((float) $this->sale_quantity * (float) $this->sale_rate, 2)
                 : null,
             ...$this->salesReport($monthOptions),
             ...$this->buyerSalesSummary($monthOptions),
+            ...$this->inChargeSalesSummary($monthOptions),
             'payingBuyer' => $this->payingBuyerId
                 ? EggBuyer::with(['payments' => fn ($query) => $query->orderByDesc('paid_on')->orderByDesc('id')])->find($this->payingBuyerId)
+                : null,
+            'transactingInCharge' => $this->transactingInChargeId
+                ? EggInCharge::with(['transactions' => fn ($query) => $query->orderByDesc('transaction_date')->orderByDesc('id')])->find($this->transactingInChargeId)
                 : null,
         ];
     }
@@ -447,12 +668,12 @@ new class extends Component
             ->sortDesc()
             ->values();
 
-        $sales = EggSale::with('buyer')
+        $sales = EggSale::with(['buyer', 'inCharge'])
             ->when($this->saleRangeFilter, fn ($query) => $query->whereDate('sale_date', '>=', now()->subDays((int) $this->saleRangeFilter - 1)->startOfDay()->toDateString()))
             ->when($this->saleYearFilter, fn ($query) => $query->whereYear('sale_date', $this->saleYearFilter))
             ->when($this->saleMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->saleMonthFilter))
             ->when($this->saleBuyerFilter, fn ($query) => $query->where('egg_buyer_id', $this->saleBuyerFilter))
-            ->when($this->saleInChargeFilter, fn ($query) => $query->where('in_charge', 'like', '%'.$this->saleInChargeFilter.'%'))
+            ->when($this->saleInChargeFilter, fn ($query) => $query->where('egg_in_charge_id', $this->saleInChargeFilter))
             ->orderByDesc('sale_date')
             ->orderByDesc('id')
             ->simplePaginate(self::SALES_PER_PAGE, ['*'], 'salesPage')
@@ -567,6 +788,102 @@ new class extends Component
             'summaryPeriodLabel' => $summaryPeriodLabel,
         ];
     }
+
+    /**
+     * Each In-Charge person's whole sales operation, not just its Cash
+     * side — an In-Charge person (e.g. Mr. Akter, the egg sales manager)
+     * owns everything under their name, Cash and Due sales alike, grouped
+     * the same way Buyer Summary groups sales — by id, within whatever
+     * Year/Month the ledger is filtered to for this period's activity,
+     * with the all-time running balance (outstandingOwed) always shown
+     * alongside it so nothing ever has to be chased down a different
+     * screen.
+     *
+     * @param  Collection<int, string>  $monthOptions
+     * @return array{inChargeSummaries: Collection<int, object>, inChargeSummaryAvailableYears: Collection<int, int>, inChargeSummaryMonthOptions: Collection<int, string>, inChargeSummaryPeriodLabel: ?string}
+     */
+    private function inChargeSalesSummary(Collection $monthOptions): array
+    {
+        $inChargeSummaryAvailableYears = EggSale::pluck('sale_date')
+            ->map(fn ($date) => $date->year)
+            ->unique()
+            ->sortDesc()
+            ->values();
+
+        $sales = EggSale::whereNotNull('egg_in_charge_id')
+            ->with('inCharge')
+            ->when($this->inChargeSummaryYearFilter, fn ($query) => $query->whereYear('sale_date', $this->inChargeSummaryYearFilter))
+            ->when($this->inChargeSummaryMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->inChargeSummaryMonthFilter))
+            ->get();
+
+        $transactionsThisPeriod = EggInChargeTransaction::when($this->inChargeSummaryYearFilter, fn ($query) => $query->whereYear('transaction_date', $this->inChargeSummaryYearFilter))
+            ->when($this->inChargeSummaryMonthFilter, fn ($query) => $query->whereMonth('transaction_date', $this->inChargeSummaryMonthFilter))
+            ->get();
+        $expensesThisPeriodByInCharge = $transactionsThisPeriod->where('type', EggInChargeTransaction::TYPE_EXPENSE)
+            ->groupBy('egg_in_charge_id')->map(fn ($t) => (float) $t->sum('amount'));
+        $remittedThisPeriodByInCharge = $transactionsThisPeriod->where('type', EggInChargeTransaction::TYPE_REMITTANCE)
+            ->groupBy('egg_in_charge_id')->map(fn ($t) => (float) $t->sum('amount'));
+
+        // Each person's real outstanding balance spans every sale and every
+        // transaction they've ever had — not just this period — so it's
+        // fetched separately, in batched queries rather than
+        // EggInCharge::outstandingOwed per row, to avoid an N+1.
+        $inChargeIds = $sales->pluck('egg_in_charge_id')->merge($transactionsThisPeriod->pluck('egg_in_charge_id'))->filter()->unique()->values();
+        $allTimeSalesByInCharge = EggSale::whereIn('egg_in_charge_id', $inChargeIds)
+            ->selectRaw('egg_in_charge_id, SUM(sale_amount) as total')
+            ->groupBy('egg_in_charge_id')
+            ->pluck('total', 'egg_in_charge_id');
+        $allTimeExpensesByInCharge = EggInChargeTransaction::where('type', EggInChargeTransaction::TYPE_EXPENSE)
+            ->whereIn('egg_in_charge_id', $inChargeIds)
+            ->selectRaw('egg_in_charge_id, SUM(amount) as total')
+            ->groupBy('egg_in_charge_id')
+            ->pluck('total', 'egg_in_charge_id');
+        $allTimeRemittedByInCharge = EggInChargeTransaction::where('type', EggInChargeTransaction::TYPE_REMITTANCE)
+            ->whereIn('egg_in_charge_id', $inChargeIds)
+            ->selectRaw('egg_in_charge_id, SUM(amount) as total')
+            ->groupBy('egg_in_charge_id')
+            ->pluck('total', 'egg_in_charge_id');
+
+        $buildSummary = function (int $inChargeId, Collection $sales) use ($expensesThisPeriodByInCharge, $remittedThisPeriodByInCharge, $allTimeSalesByInCharge, $allTimeExpensesByInCharge, $allTimeRemittedByInCharge) {
+            return (object) [
+                'inChargeId' => $inChargeId,
+                'inChargeName' => $sales->first()?->inCharge?->name ?: EggInCharge::find($inChargeId)?->name ?: 'Unknown',
+                'cashAmount' => (float) $sales->where('payment_status', 'cash')->sum('sale_amount'),
+                'dueAmount' => (float) $sales->where('payment_status', 'due')->sum('sale_amount'),
+                'totalSales' => (float) $sales->sum('sale_amount'),
+                'expenseAmount' => (float) ($expensesThisPeriodByInCharge[$inChargeId] ?? 0),
+                'remittedAmount' => (float) ($remittedThisPeriodByInCharge[$inChargeId] ?? 0),
+                'outstandingOwed' => max(0.0, (float) ($allTimeSalesByInCharge[$inChargeId] ?? 0)
+                    - (float) ($allTimeExpensesByInCharge[$inChargeId] ?? 0)
+                    - (float) ($allTimeRemittedByInCharge[$inChargeId] ?? 0)),
+            ];
+        };
+
+        $salesByInCharge = $sales->groupBy('egg_in_charge_id');
+        $inChargeSummaries = $salesByInCharge->map(fn (Collection $sales, $inChargeId) => $buildSummary((int) $inChargeId, $sales));
+
+        // Someone with a transaction this period but no sale this period
+        // (an expense recorded against a prior period's balance) still
+        // needs their own row.
+        foreach ($transactionsThisPeriod->pluck('egg_in_charge_id')->unique()->diff($salesByInCharge->keys()) as $inChargeId) {
+            $inChargeSummaries->push($buildSummary($inChargeId, collect()));
+        }
+
+        $inChargeSummaries = $inChargeSummaries->sortBy('inChargeName')->values();
+
+        $inChargeSummaryPeriodLabel = match (true) {
+            (bool) $this->inChargeSummaryYearFilter && (bool) $this->inChargeSummaryMonthFilter => Carbon::create((int) $this->inChargeSummaryYearFilter, (int) $this->inChargeSummaryMonthFilter, 1)->format('F Y'),
+            (bool) $this->inChargeSummaryYearFilter => (string) $this->inChargeSummaryYearFilter,
+            default => null,
+        };
+
+        return [
+            'inChargeSummaries' => $inChargeSummaries,
+            'inChargeSummaryAvailableYears' => $inChargeSummaryAvailableYears,
+            'inChargeSummaryMonthOptions' => $monthOptions,
+            'inChargeSummaryPeriodLabel' => $inChargeSummaryPeriodLabel,
+        ];
+    }
 }; ?>
 
 <div class="space-y-4">
@@ -598,6 +915,14 @@ new class extends Component
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 0 0-3-3.87M9 20H4v-2a4 4 0 0 1 3-3.87m6-1.13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm6 0a4 4 0 1 0 0-8" /></svg>
             Buyer Summary
         </button>
+        <button
+            type="button"
+            wire:click="switchView('in-charge')"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'in-charge' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+        >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8m-4-4h8M12 3v2m0 14v2m9-9h-2M5 12H3" /><circle cx="12" cy="12" r="9" /></svg>
+            In-Charge Ledger
+        </button>
     </div>
 
     @if ($activeView === 'sales')
@@ -612,7 +937,7 @@ new class extends Component
                     <button
                         type="button"
                         wire:click="$set('saleRangeFilter', '{{ $value }}')"
-                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $saleRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ ($value === '' ? ($saleRangeFilter === '' && ! $saleYearFilter) : $saleRangeFilter === (string) $value) ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
                     >
                         {{ $label }}
                     </button>
@@ -640,7 +965,12 @@ new class extends Component
                 @endforeach
             </x-select-input>
 
-            <x-text-input wire:model.live.debounce.400ms="saleInChargeFilter" placeholder="Search by In-Charge" class="w-full sm:w-48" />
+            <x-select-input wire:model.live="saleInChargeFilter" class="w-full sm:w-48">
+                <option value="">Every In-Charge</option>
+                @foreach ($inCharges as $inCharge)
+                    <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
+                @endforeach
+            </x-select-input>
         </div>
 
         @forelse ($sales as $sale)
@@ -661,8 +991,8 @@ new class extends Component
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                             Qty {{ rtrim(rtrim(number_format((float) $sale->quantity, 2), '0'), '.') }}
                             · Rate {{ number_format((float) $sale->sale_rate, 2) }}
-                            @if ($sale->in_charge)
-                                · In-Charge: {{ $sale->in_charge }}
+                            @if ($sale->inCharge)
+                                · In-Charge: {{ $sale->inCharge->name }}
                             @endif
                         </p>
                         @if ($sale->remarks)
@@ -783,6 +1113,93 @@ new class extends Component
                 </table>
             </div>
         @endif
+    @elseif ($activeView === 'in-charge')
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+            Everything each In-Charge person (e.g. Mr. Akter) does in their egg sales business — the full
+            value of every sale under their name (Cash and Due alike, since it's all their responsibility),
+            what they've spent on other things, what they've handed back to the office, and what they still
+            owe overall right now.
+        </p>
+
+        <div class="flex flex-wrap items-center gap-3">
+            <x-select-input wire:model.live="inChargeSummaryYearFilter" class="w-full sm:w-32">
+                <option value="">Every year</option>
+                @foreach ($inChargeSummaryAvailableYears as $year)
+                    <option value="{{ $year }}">{{ $year }}</option>
+                @endforeach
+            </x-select-input>
+
+            <x-select-input wire:model.live="inChargeSummaryMonthFilter" class="w-full sm:w-40" :disabled="! $inChargeSummaryYearFilter">
+                <option value="">{{ $inChargeSummaryYearFilter ? 'Every month' : 'Pick a year first' }}</option>
+                @foreach ($inChargeSummaryMonthOptions as $value => $label)
+                    <option value="{{ $value }}">{{ $label }}</option>
+                @endforeach
+            </x-select-input>
+        </div>
+
+        @if ($inChargeSummaries->isEmpty())
+            <x-empty-state
+                title="No In-Charge activity matches these filters"
+                message="Try a different year or month — or clear the filters above."
+            />
+        @else
+            <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-800">
+                <table class="w-full min-w-[760px] text-sm">
+                    <thead>
+                        <tr class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
+                            <th class="px-4 py-2">In-Charge</th>
+                            <th class="px-4 py-2 text-right">Cash</th>
+                            <th class="px-4 py-2 text-right">Due</th>
+                            <th class="px-4 py-2 text-right">
+                                Total Sales
+                                @if ($inChargeSummaryPeriodLabel)
+                                    <span class="block text-[10px] font-normal normal-case text-slate-400 dark:text-slate-500">{{ $inChargeSummaryPeriodLabel }}</span>
+                                @endif
+                            </th>
+                            <th class="px-4 py-2 text-right">Spent</th>
+                            <th class="px-4 py-2 text-right">Remitted</th>
+                            <th class="px-4 py-2 text-right">Owes Overall</th>
+                            <th class="px-4 py-2"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($inChargeSummaries as $summary)
+                            <tr class="border-b border-slate-100 last:border-0 dark:border-slate-700/50">
+                                <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{{ $summary->inChargeName }}</td>
+                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->cashAmount, 2) }}</td>
+                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->dueAmount, 2) }}</td>
+                                <td class="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200">{{ number_format($summary->totalSales, 2) }}</td>
+                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->expenseAmount, 2) }}</td>
+                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->remittedAmount, 2) }}</td>
+                                <td class="px-4 py-3 text-right font-semibold {{ $summary->outstandingOwed > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-white' }}">{{ number_format($summary->outstandingOwed, 2) }}</td>
+                                <td class="px-4 py-3 text-right whitespace-nowrap">
+                                    <button type="button" wire:click="viewInChargeSales({{ $summary->inChargeId }})" class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                                        View
+                                    </button>
+                                    @can('egg_sales.modify')
+                                        <button type="button" wire:click="startRecordInChargeTransaction({{ $summary->inChargeId }})" class="ml-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300">
+                                            Record Transaction
+                                        </button>
+                                    @endcan
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                    <tfoot>
+                        <tr class="bg-slate-50 dark:bg-slate-900/50">
+                            <td class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400">Total</td>
+                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('cashAmount'), 2) }}</td>
+                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('dueAmount'), 2) }}</td>
+                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('totalSales'), 2) }}</td>
+                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('expenseAmount'), 2) }}</td>
+                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('remittedAmount'), 2) }}</td>
+                            <td class="px-4 py-2 text-right text-sm font-bold text-slate-900 dark:text-white">{{ number_format($inChargeSummaries->sum('outstandingOwed'), 2) }}</td>
+                            <td class="px-4 py-2"></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        @endif
     @endif
 
     <x-modal name="egg-sale-form" focusable>
@@ -873,9 +1290,53 @@ new class extends Component
             </div>
 
             <div>
-                <x-input-label for="in_charge" value="In-Charge" />
-                <x-text-input wire:model="in_charge" id="in_charge" placeholder="Optional" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('in_charge')" class="mt-2" />
+                <x-input-label for="egg_in_charge_id" value="In-Charge" />
+
+                @if ($showEditInChargeFields)
+                    <div class="mt-1 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <x-text-input wire:model="edit_in_charge_name" placeholder="In-Charge name" class="block w-full" />
+                        <x-input-error :messages="$errors->get('edit_in_charge_name')" class="mt-1" />
+                        <x-text-input wire:model="edit_in_charge_phone" placeholder="Phone (optional)" class="block w-full" />
+                        <div class="flex items-center gap-3">
+                            <x-secondary-button type="button" wire:click="saveInChargeInline">Save In-Charge</x-secondary-button>
+                            <button type="button" wire:click="$set('showEditInChargeFields', false)" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
+                        </div>
+                    </div>
+                @elseif (! $showNewInChargeFields)
+                    <div class="mt-1 flex items-center gap-2">
+                        <x-select-input wire:model="egg_in_charge_id" id="egg_in_charge_id" class="block w-full">
+                            <option value="">Optional…</option>
+                            @foreach ($inCharges as $inCharge)
+                                <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
+                            @endforeach
+                        </x-select-input>
+                        @if ($egg_in_charge_id)
+                            <button type="button" wire:click="startEditInChargeInline" class="shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                                Edit
+                            </button>
+                        @endif
+                        <button type="button" wire:click="$set('showNewInChargeFields', true)" class="shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                            + New
+                        </button>
+                    </div>
+                @else
+                    <div class="mt-1 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                        <x-text-input wire:model="new_in_charge_name" placeholder="In-Charge name" class="block w-full" />
+                        <x-input-error :messages="$errors->get('new_in_charge_name')" class="mt-1" />
+                        <x-text-input wire:model="new_in_charge_phone" placeholder="Phone (optional)" class="block w-full" />
+                        <div class="flex items-center gap-3">
+                            <x-secondary-button type="button" wire:click="addInChargeInline">Add In-Charge</x-secondary-button>
+                            <button type="button" wire:click="$set('showNewInChargeFields', false)" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
+                        </div>
+                    </div>
+                @endif
+                @if (! $showEditInChargeFields && ! $showNewInChargeFields)
+                    <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
+                        Whoever personally collects this sale's cash — only matters when Payment is Cash, so
+                        their In-Charge Ledger stays accurate.
+                    </p>
+                @endif
+                <x-input-error :messages="$errors->get('egg_in_charge_id')" class="mt-2" />
             </div>
 
             <div>
@@ -983,6 +1444,109 @@ new class extends Component
             <div class="mt-6 flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
                 <x-danger-button type="button" wire:click="deleteBuyerPayment">Remove</x-danger-button>
+            </div>
+        </div>
+    </x-modal>
+
+    <x-modal name="egg-in-charge-transaction-form" focusable>
+        <form wire:submit="recordInChargeTransaction" class="space-y-6 p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
+                Record Transaction{{ $transactingInCharge ? ' — '.$transactingInCharge->name : '' }}
+            </h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                An expense they paid out of the cash they're holding, or cash they've actually handed back
+                to the office — either way, this reduces what they owe overall.
+            </p>
+
+            @if ($transactingInCharge)
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Currently owes: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($transactingInCharge->outstandingOwed, 2) }}</span>
+                </p>
+            @endif
+
+            <div>
+                <x-input-label value="Type" />
+                <div class="mt-1 flex gap-4">
+                    <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="radio" wire:model="transactionType" value="expense" class="text-brand-600 focus:ring-brand-500">
+                        Expense
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                        <input type="radio" wire:model="transactionType" value="remittance" class="text-brand-600 focus:ring-brand-500">
+                        Remittance (handed to office)
+                    </label>
+                </div>
+                <x-input-error :messages="$errors->get('transactionType')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="transactionAmount" value="Amount" />
+                <x-text-input wire:model="transactionAmount" id="transactionAmount" type="number" step="0.01" min="0.01" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('transactionAmount')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="transactionDate" value="Date" />
+                <x-text-input wire:model="transactionDate" id="transactionDate" type="date" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('transactionDate')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="transactionDescription" value="Description" />
+                <x-text-input wire:model="transactionDescription" id="transactionDescription" placeholder="e.g. Egg crate repair" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('transactionDescription')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="transactionRemarks" value="Remarks" />
+                <x-textarea-input wire:model="transactionRemarks" id="transactionRemarks" placeholder="Optional" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('transactionRemarks')" class="mt-2" />
+            </div>
+
+            @if ($transactingInCharge && $transactingInCharge->transactions->isNotEmpty())
+                <div>
+                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Transaction History</p>
+                    <div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">
+                        @foreach ($transactingInCharge->transactions as $transaction)
+                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-2 py-1 text-xs dark:bg-slate-900/50">
+                                <span class="text-slate-600 dark:text-slate-400">
+                                    <span class="font-medium {{ $transaction->type === 'remittance' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400' }}">
+                                        {{ $transaction->type === 'remittance' ? 'Remitted' : 'Spent' }}
+                                    </span>
+                                    {{ number_format((float) $transaction->amount, 2) }} — {{ $transaction->transaction_date->format('d M Y') }}
+                                    · {{ $transaction->description }}
+                                </span>
+                                @can('egg_sales.modify')
+                                    <button type="button" wire:click="confirmDeleteInChargeTransaction({{ $transaction->id }})" class="font-medium text-red-400 hover:text-red-600 dark:text-red-400/80 dark:hover:text-red-300">
+                                        Remove
+                                    </button>
+                                @endcan
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+            @endif
+
+            <div class="flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">
+                    Cancel
+                </x-secondary-button>
+                <x-primary-button>
+                    Record Transaction
+                </x-primary-button>
+            </div>
+        </form>
+    </x-modal>
+
+    <x-modal name="confirm-egg-in-charge-transaction-deletion" focusable>
+        <div class="p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Remove this transaction?</h2>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
+                This In-Charge person's outstanding balance will change accordingly. This cannot be undone.
+            </p>
+            <div class="mt-6 flex justify-end gap-3">
+                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
+                <x-danger-button type="button" wire:click="deleteInChargeTransaction">Remove</x-danger-button>
             </div>
         </div>
     </x-modal>

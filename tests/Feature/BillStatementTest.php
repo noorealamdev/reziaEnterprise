@@ -71,6 +71,7 @@ test('Total Billed always reconciles to Total Paid plus Total Outstanding, acros
     JobEntry::factory()->create(['company_id' => $company->id, 'service_category_id' => $category->id, 'entry_date' => '2026-05-01', 'bill_amount' => 3000]);
 
     $statement = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id);
 
     // 8,500 (generated, VAT deducted) + 18,000 (manual, VAT deducted) + 3,000 (pending) = 29,500.
@@ -117,6 +118,7 @@ test('a VAT invoice shows both the actual (pre-VAT) amount and the net amount', 
         ->assertHasNoErrors();
 
     $row = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->viewData('rows')
         ->sole();
@@ -146,6 +148,7 @@ test('screen pagination never drops a row from the printed statement or the tota
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id);
 
     // $rows itself (what the print block renders from) always holds every
@@ -180,6 +183,7 @@ test('rows are ordered most recent period first', function () {
     $this->actingAs($user);
 
     $rows = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->viewData('rows');
 
@@ -238,6 +242,7 @@ test('year, month and status filters narrow the rows and their totals', function
 
     // Status: Billed only finds the invoiced 2025 row.
     $billedOnly = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'billed');
     expect($billedOnly->viewData('rows'))->toHaveCount(1);
@@ -245,6 +250,7 @@ test('year, month and status filters narrow the rows and their totals', function
 
     // Status: Unbilled only finds the pending 2026 row.
     $unbilledOnly = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'unbilled');
     expect($unbilledOnly->viewData('rows'))->toHaveCount(1);
@@ -290,18 +296,21 @@ test('status filter narrows to paid, unpaid, or signed invoices — matching the
     $this->actingAs($user);
 
     $paidOnly = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'paid');
     expect($paidOnly->viewData('rows'))->toHaveCount(1);
     expect($paidOnly->viewData('totalBilled'))->toBe(1000.0);
 
     $unpaidOnly = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'unpaid');
     expect($unpaidOnly->viewData('rows'))->toHaveCount(2);
     expect($unpaidOnly->viewData('totalBilled'))->toBe(800.0);
 
     $signedOnly = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'signed');
     expect($signedOnly->viewData('rows'))->toHaveCount(1);
@@ -378,6 +387,7 @@ test('selecting a company lists its invoices with amount, status and running tot
     $this->actingAs($user);
 
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('AAL-202606')
         ->assertSee('AAL-202607')
@@ -421,6 +431,7 @@ test('with no company filter, invoices from every company are listed together', 
     $this->actingAs($user);
 
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->assertSee('AAL-202608')
         ->assertSee('FPL-202608')
         ->assertSee('Ananta Apparels Ltd')
@@ -458,6 +469,7 @@ test('an invoice from another company never appears in this companys statement',
     $this->actingAs($user);
 
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('AAL-202608')
         ->assertDontSee('OFL-202608');
@@ -484,6 +496,7 @@ test('unbilled job entries appear as a Not Invoiced row without needing an invoi
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('Not Invoiced')
         ->assertSee('1,000.00');
@@ -531,6 +544,7 @@ test('a pending Tiffin month bills only for Egg, not Banana/Bread which never ca
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('75,000.00');
 
@@ -574,6 +588,7 @@ test('a generated Tiffin invoice sums only Egg\'s bill_amount, not every ingredi
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('75,000.00');
 
@@ -596,6 +611,7 @@ test('a pending months Generate Invoice link pre-fills the company, category and
     $this->actingAs($user);
 
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee(route('invoices.create', ['company' => $company->id, 'category' => $category->id, 'period' => '2026-08']));
 });
@@ -622,6 +638,7 @@ test('two categories with unbilled entries the same month show as two separate p
     $this->actingAs($user);
 
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('Tiffin')
         ->assertSee('Diesel Oil Supply')
@@ -647,6 +664,7 @@ test('an already-invoiced month does not also appear as pending', function () {
     $this->actingAs($user);
 
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('AAL-202608')
         ->assertDontSee('Not Invoiced');
@@ -672,6 +690,7 @@ test('a paid invoice shows zero balance due while a due invoice shows its full a
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id);
 
     expect($component->viewData('totalOutstanding'))->toBe(0.0);
@@ -697,6 +716,7 @@ test('a partially paid invoice shows Partially Paid and the remaining balance', 
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->assertSee('Partially Paid')
         // Balance Due: 1000 - 400
@@ -730,6 +750,7 @@ test('balance due accounts for an advance already paid against a due invoice', f
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         // Amount billed is still the full 100,000
         ->assertSee('100,000.00')
@@ -763,6 +784,7 @@ test('Total Paid includes advance payments, so Billed always reconciles to Paid 
     $this->actingAs($user);
 
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id);
 
     $billed = $component->viewData('totalBilled');
@@ -882,6 +904,7 @@ test('a row flags whether its bill has a signed copy on file, independent of pay
     $this->actingAs($user);
 
     $rows = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->viewData('rows')
         ->keyBy(fn ($row) => $row->invoice->id);
@@ -935,6 +958,7 @@ test('the Signed badge is hidden once a bill is fully paid', function () {
     // The underlying flag stays true either way — it's the badge that's
     // conditionally hidden once paid, not the fact itself.
     $component = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id);
 
     $rows = $component->viewData('rows')->keyBy(fn ($row) => $row->invoice->id);
@@ -947,6 +971,7 @@ test('the Signed badge is hidden once a bill is fully paid', function () {
     // "Signed" itself still appears as a status filter option, so this
     // checks for the badge's own title text, not the bare word.
     Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $company->id)
         ->set('statusFilter', 'billed')
         ->set('search', 'PAID-1')

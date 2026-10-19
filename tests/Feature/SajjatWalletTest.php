@@ -8,7 +8,7 @@ use App\UserRole;
 use Livewire\Volt\Volt;
 
 test('guests are redirected to login', function () {
-    $this->get('/sazzad')->assertRedirect('/login');
+    $this->get('/sajjat')->assertRedirect('/login');
 });
 
 test('a top-up raises the chosen wallet and an expense lowers only the wallet it was paid from', function () {
@@ -113,7 +113,7 @@ test('the balance cards stay all-time while the period totals follow the filters
     expect($september->viewData('spentInView'))->toBe(300.0);
     expect($september->viewData('balances'))->toBe(['bkash' => 500.0, 'cash' => 700.0]);
 
-    $cashOnly = Volt::test('sajjat.wallet-manager')->set('walletFilter', 'cash');
+    $cashOnly = Volt::test('sajjat.wallet-manager')->set('yearFilter', '')->set('walletFilter', 'cash');
     expect($cashOnly->viewData('transactions'))->toHaveCount(2);
 });
 
@@ -140,7 +140,7 @@ test('a user with only sajjat.view sees the ledger but cannot add, edit or delet
     RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::SajjatView->value]);
     $entry = SajjatTransaction::factory()->create();
 
-    $this->actingAs($staff)->get('/sazzad')->assertOk();
+    $this->actingAs($staff)->get('/sajjat')->assertOk();
 
     Volt::test('sajjat.wallet-manager')
         ->assertDontSee('+ Record Expense')
@@ -157,7 +157,7 @@ test('a user with only sajjat.view sees the ledger but cannot add, edit or delet
 
 test('an accountant without the sajjat permissions is forbidden from the page', function () {
     $this->actingAs(User::factory()->accountant()->create())
-        ->get('/sazzad')
+        ->get('/sajjat')
         ->assertForbidden();
 });
 
@@ -166,9 +166,9 @@ test('the type filter narrows the ledger to top-ups or expenses', function () {
     SajjatTransaction::factory()->topUp()->count(2)->create();
     SajjatTransaction::factory()->count(3)->create();
 
-    expect(Volt::test('sajjat.wallet-manager')->set('typeFilter', 'top_up')->viewData('transactions'))->toHaveCount(2);
-    expect(Volt::test('sajjat.wallet-manager')->set('typeFilter', 'expense')->viewData('transactions'))->toHaveCount(3);
-    expect(Volt::test('sajjat.wallet-manager')->set('typeFilter', 'nonsense')->viewData('transactions'))->toHaveCount(5);
+    expect(Volt::test('sajjat.wallet-manager')->set('yearFilter', '')->set('typeFilter', 'top_up')->viewData('transactions'))->toHaveCount(2);
+    expect(Volt::test('sajjat.wallet-manager')->set('yearFilter', '')->set('typeFilter', 'expense')->viewData('transactions'))->toHaveCount(3);
+    expect(Volt::test('sajjat.wallet-manager')->set('yearFilter', '')->set('typeFilter', 'nonsense')->viewData('transactions'))->toHaveCount(5);
 });
 
 test('search matches the description or the remarks, case-insensitively', function () {
@@ -177,7 +177,7 @@ test('search matches the description or the remarks, case-insensitively', functi
     SajjatTransaction::factory()->create(['description' => 'Transport', 'remarks' => 'paid to the Loading crew']);
     SajjatTransaction::factory()->create(['description' => 'Tea', 'remarks' => null]);
 
-    $found = Volt::test('sajjat.wallet-manager')->set('search', 'loading');
+    $found = Volt::test('sajjat.wallet-manager')->set('yearFilter', '')->set('search', 'loading');
     expect($found->viewData('transactions')->pluck('description')->all())
         ->toEqualCanonicalizing(['Loading labour tip', 'Transport']);
 });
@@ -233,6 +233,7 @@ test('filters combine, and the totals follow them while balances stay all-time',
     SajjatTransaction::factory()->create(['wallet' => 'bkash', 'amount' => 300, 'description' => 'Tea', 'transaction_date' => '2026-09-03']);
 
     $view = Volt::test('sajjat.wallet-manager')
+        ->set('yearFilter', '')
         ->set('walletFilter', 'cash')
         ->set('typeFilter', 'expense')
         ->set('search', 'tea');
@@ -266,9 +267,11 @@ test('an entry\'s remarks are shown on its row, and rows without remarks show no
     SajjatTransaction::factory()->create(['description' => 'Tea', 'remarks' => null]);
 
     Volt::test('sajjat.wallet-manager')
+        ->set('yearFilter', '')
         ->assertSee('Went to the port twice');
 
     Volt::test('sajjat.wallet-manager')
+        ->set('yearFilter', '')
         ->call('startExpense')
         ->set('amount', '75')
         ->set('description', 'Snacks')

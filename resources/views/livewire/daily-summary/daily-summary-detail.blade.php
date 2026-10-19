@@ -21,16 +21,21 @@ new class extends Component
     {
         $entries = JobEntry::where('company_id', $this->company->id)
             ->whereDate('entry_date', $this->date)
-            ->with(['serviceCategory', 'tiffinDepartment'])
+            ->with(['serviceCategory', 'tiffinDepartment', 'collectedFromCompany'])
             ->orderBy('service_category_id')
             ->orderBy('id')
             ->get();
 
+        // Shipment Tiffin Cost (Loading Unloading only — feeding labourers on
+        // the shipment) is folded into Cost here so Cost + Profit always
+        // reconciles to Bill — it's never billed to the factory, so it was
+        // already deducted from profit_amount underneath; this just
+        // surfaces it in Cost too instead of leaving it invisible.
         $categories = $entries->groupBy('service_category_id')
             ->map(fn ($group) => [
                 'category' => $group->first()->serviceCategory,
                 'entries' => $group,
-                'costAmount' => $group->sum('cost_amount'),
+                'costAmount' => $group->sum('cost_amount') + $group->sum('shipment_tiffin_cost'),
                 'billAmount' => $group->sum('bill_amount'),
                 'profitAmount' => $group->sum('profit_amount'),
             ])
@@ -40,7 +45,7 @@ new class extends Component
         return [
             'categories' => $categories,
             'entryCount' => $entries->count(),
-            'totalCostAmount' => $entries->sum('cost_amount'),
+            'totalCostAmount' => $entries->sum('cost_amount') + $entries->sum('shipment_tiffin_cost'),
             'totalBillAmount' => $entries->sum('bill_amount'),
             'totalProfitAmount' => $entries->sum('profit_amount'),
         ];
@@ -82,7 +87,10 @@ new class extends Component
                             </td>
                         </tr>
 
-                        @if ($group['entries']->first()->tiffin_department_id)
+                        {{-- tiffin_department_id is also reused for Simba Fashion's
+                        per-unit Daily Basic Labour entries — only an actual Tiffin
+                        group uses the department/Egg-billing layout below. --}}
+                        @if ($group['entries']->first()->tiffin_department_id && $group['category']->name === 'Tiffin')
                             {{-- Tiffin is billed as one package per department, not per
                             ingredient — so this shows one row per department instead of
                             one per item (Banana/Egg/Bread). Only Egg's row actually
@@ -128,6 +136,9 @@ new class extends Component
                                         @if ($entry->floor)
                                             <span class="text-slate-400 dark:text-slate-500">— {{ $entry->floor }}</span>
                                         @endif
+                                        @if ($entry->collected_from_company_id)
+                                            <span class="text-slate-400 dark:text-slate-500">— Collected from {{ $entry->collectedFromCompany->name }}</span>
+                                        @endif
                                         @if ($entry->is_off_day)
                                             <x-badge color="amber" class="ml-1">Off Day</x-badge>
                                         @endif
@@ -135,7 +146,7 @@ new class extends Component
                                     <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format((float) $entry->quantity, 2) }}</td>
                                     <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format((float) $entry->cost_rate, 2) }}</td>
                                     <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format((float) $entry->bill_rate, 2) }}</td>
-                                    <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format((float) $entry->cost_amount, 2) }}</td>
+                                    <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format((float) $entry->cost_amount + (float) $entry->shipment_tiffin_cost, 2) }}</td>
                                     <td class="px-4 py-2 text-right font-medium text-slate-800 dark:text-slate-200">{{ number_format((float) $entry->bill_amount, 2) }}</td>
                                     <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format((float) $entry->profit_amount, 2) }}</td>
                                 </tr>

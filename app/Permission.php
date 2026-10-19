@@ -31,6 +31,10 @@ enum Permission: string
     case CompanyAgreementsCreate = 'company_agreements.create';
     case CompanyAgreementsModify = 'company_agreements.modify';
 
+    case LicensesView = 'licenses.view';
+    case LicensesCreate = 'licenses.create';
+    case LicensesModify = 'licenses.modify';
+
     case DailySummaryView = 'daily_summary.view';
 
     case ServiceCategoriesManage = 'service_categories.manage';
@@ -90,6 +94,9 @@ enum Permission: string
             self::CompanyAgreementsView => 'View company agreements & deadlines',
             self::CompanyAgreementsCreate => 'Add company agreements',
             self::CompanyAgreementsModify => 'Edit / delete company agreements',
+            self::LicensesView => 'View company licenses & renewal deadlines',
+            self::LicensesCreate => 'Add company licenses',
+            self::LicensesModify => 'Edit / delete company licenses',
             self::DailySummaryView => 'View Daily Summary',
             self::ServiceCategoriesManage => 'Manage service categories & Tiffin items',
             self::BillStatementView => 'View Bill Statement',
@@ -106,10 +113,10 @@ enum Permission: string
             self::ExpensesView => 'View expenses',
             self::ExpensesCreate => 'Record expenses',
             self::ExpensesModify => 'Edit / delete expenses',
-            self::SajjatView => 'View Sazzad wallet balances & ledger',
-            self::SajjatCreate => 'Record Sazzad top-ups & expenses',
-            self::SajjatModify => 'Edit / delete Sazzad entries',
-            self::SajjatNewspapersView => 'View Sazzad newspapers & their payments',
+            self::SajjatView => 'View Sajjat wallet balances & ledger',
+            self::SajjatCreate => 'Record Sajjat top-ups & expenses',
+            self::SajjatModify => 'Edit / delete Sajjat entries',
+            self::SajjatNewspapersView => 'View Sajjat newspapers & their payments',
             self::SajjatNewspapersCreate => 'Add newspapers & record newspaper payments',
             self::SajjatNewspapersModify => 'Edit / delete newspapers & their payments',
             self::PersonalLedgerManage => 'Use the Personal Ledger (contacts, sales & payments)',
@@ -127,6 +134,7 @@ enum Permission: string
             self::EggSalesView, self::EggSalesCreate, self::EggSalesModify => 'Egg Sales',
             self::CompanyPurchasesView, self::CompanyPurchasesCreate, self::CompanyPurchasesModify => 'Company Purchases',
             self::CompanyAgreementsView, self::CompanyAgreementsCreate, self::CompanyAgreementsModify => 'Company Agreements',
+            self::LicensesView, self::LicensesCreate, self::LicensesModify => 'Licenses',
             self::DailySummaryView => 'Daily Summary',
             self::ServiceCategoriesManage => 'Service Categories',
             self::BillStatementView => 'Bill Statement',
@@ -136,7 +144,7 @@ enum Permission: string
             self::SalaryPaymentsCreate, self::SalaryPaymentsModify => 'Staff Salaries',
             self::ExpensesView, self::ExpensesCreate, self::ExpensesModify => 'Expenses',
             self::SajjatView, self::SajjatCreate, self::SajjatModify,
-            self::SajjatNewspapersView, self::SajjatNewspapersCreate, self::SajjatNewspapersModify => 'Sazzad',
+            self::SajjatNewspapersView, self::SajjatNewspapersCreate, self::SajjatNewspapersModify => 'Sajjat',
             self::PersonalLedgerManage => 'Personal Ledger',
             self::SettingsManage => 'Settings',
         };

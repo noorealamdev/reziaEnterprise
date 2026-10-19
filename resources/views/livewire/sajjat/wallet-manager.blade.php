@@ -68,6 +68,11 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
+
+        if ($this->yearFilter === '' && $this->rangeFilter === '' && $this->dateFrom === '' && $this->dateTo === '') {
+            $this->yearFilter = (string) now()->year;
+            $this->monthFilter = (string) now()->month;
+        }
     }
 
     public function updatingYearFilter(): void
@@ -336,7 +341,7 @@ new class extends Component
         $topUpsInView = (float) (clone $query)->where('type', SajjatTransaction::TYPE_TOP_UP)->sum('amount');
         $spentInView = (float) (clone $query)->where('type', SajjatTransaction::TYPE_EXPENSE)->sum('amount');
 
-        // Balances are always all-time — how much Sazzad has on hand right
+        // Balances are always all-time — how much Sajjat has on hand right
         // now doesn't depend on which month is being looked at.
         $balances = SajjatTransaction::balances();
 
@@ -387,7 +392,7 @@ new class extends Component
     </div>
 
     <p class="text-xs text-slate-500 dark:text-slate-400">
-        Money given to Sazzad by bKash or cash, and what he spends of it each day. Each wallet's balance is
+        Money given to Sajjat by bKash or cash, and what he spends of it each day. Each wallet's balance is
         everything topped up into it minus everything spent from it.
     </p>
 
@@ -511,7 +516,7 @@ new class extends Component
         </div>
     @empty
         <x-empty-state
-            :title="$availableYears->isNotEmpty() ? 'No entries match these filters' : 'Nothing recorded for Sazzad yet'"
+            :title="$availableYears->isNotEmpty() ? 'No entries match these filters' : 'Nothing recorded for Sajjat yet'"
             :message="$availableYears->isNotEmpty() ? 'Try different filters — or clear them above.' : 'Start by topping up his bKash or cash, then record what he spends.'"
         >
             @can('sajjat.create')
@@ -530,7 +535,7 @@ new class extends Component
         <form wire:submit="save" class="space-y-6 p-6">
             <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
                 @if ($type === \App\Models\SajjatTransaction::TYPE_TOP_UP)
-                    {{ $editingId ? 'Edit Top-up' : 'Top Up Sazzad' }}
+                    {{ $editingId ? 'Edit Top-up' : 'Top Up Sajjat' }}
                 @else
                     {{ $editingId ? 'Edit Expense' : 'Record Expense' }}
                 @endif

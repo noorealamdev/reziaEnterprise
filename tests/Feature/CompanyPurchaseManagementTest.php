@@ -48,6 +48,7 @@ test('a purchase remarks is shown on its row in the purchases list', function ()
     $this->actingAs($user);
 
     Volt::test('company-purchases.purchase-manager')
+        ->set('yearFilter', '')
         ->call('startCreate')
         ->set('company_id', $simba->id)
         ->set('purchase_date', '2026-09-02')

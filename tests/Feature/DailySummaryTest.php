@@ -38,6 +38,7 @@ test('selecting a company lists its distinct days with entry counts and totals',
 
     Volt::test('daily-summary.daily-summary-list')
         ->set('companyFilter', (string) $company->id)
+        ->set('yearFilter', '')
         ->assertSee('15 Aug 2026')
         ->assertSee('1,500.00')
         ->assertSee('16 Aug 2026')
@@ -80,6 +81,75 @@ test('year and month filters narrow the listed days', function () {
         ->set('yearFilter', '2026')
         ->set('monthFilter', '4');
     expect($wrongMonth->viewData('days'))->toHaveCount(0);
+});
+
+test('from and to date filters narrow the listed days to that range, inclusive', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-05',
+        'bill_amount' => 1000,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-10',
+        'bill_amount' => 500,
+    ]);
+    // Outside the chosen range on both sides — neither may leak in.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-04',
+        'bill_amount' => 9999,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-11',
+        'bill_amount' => 8888,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('daily-summary.daily-summary-list')
+        ->set('companyFilter', (string) $company->id)
+        ->set('yearFilter', '')
+        ->set('fromDate', '2026-08-05')
+        ->set('toDate', '2026-08-10');
+
+    expect($component->viewData('days'))->toHaveCount(2);
+    $component
+        ->assertSee('1,000.00')
+        ->assertSee('500.00')
+        ->assertDontSee('9,999.00')
+        ->assertDontSee('8,888.00');
+});
+
+test('a To date before From is swapped instead of showing nothing', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-07',
+        'bill_amount' => 750,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('daily-summary.daily-summary-list')
+        ->set('companyFilter', (string) $company->id)
+        ->set('yearFilter', '')
+        ->set('fromDate', '2026-08-10')
+        ->set('toDate', '2026-08-05')
+        ->assertSee('750.00');
 });
 
 test('changing the year clears an incompatible month selection', function () {
@@ -139,6 +209,35 @@ test('the daily detail page groups entries by category with subtotals and a gran
         ->assertSee('Daily Basic Labour')
         ->assertDontSee('999.00')
         ->assertSee('7,850.00');
+});
+
+test('the daily detail page folds shipment tiffin cost into Cost, but never into Bill', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $loadingUnloading = makeServiceCategory('Loading Unloading');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $loadingUnloading->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Big',
+        'cost_amount' => 12600,
+        'bill_amount' => 15300,
+        'shipment_tiffin_cost' => 500,
+        'profit_amount' => 2200,
+    ]);
+
+    $this->actingAs($user);
+
+    // Cost includes the shipment cost (12,600 + 500) on both the per-item
+    // row and the category/grand total, so Cost + Profit reconciles to
+    // Bill — never added to Bill itself.
+    $this->get(route('daily-summary.show', ['company' => $company->id, 'date' => '2026-08-15']))
+        ->assertOk()
+        ->assertSee('13,100.00')
+        ->assertDontSee('12,600.00')
+        ->assertSee('15,300.00')
+        ->assertSee('2,200.00');
 });
 
 test('a tiffin departments items collapse into one row instead of one per item', function () {

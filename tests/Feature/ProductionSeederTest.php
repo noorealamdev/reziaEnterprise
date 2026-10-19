@@ -13,7 +13,7 @@ test('ProductionSeeder seeds real setup data only, with none of the demo/dummy d
     $this->assertDatabaseHas('tiffin_items', ['name' => 'Egg']);
     $this->assertDatabaseHas('loading_unloading_items', ['name' => 'Big']);
     $this->assertDatabaseHas('companies', ['code' => 'AAL', 'name' => 'Ananta Apparels Ltd']);
-    $this->assertDatabaseHas('companies', ['code' => 'SIMBA', 'name' => 'Simba Fashion']);
+    $this->assertDatabaseHas('companies', ['code' => 'SFL', 'name' => 'Simba Fashion Ltd']);
     expect(RolePermission::count())->toBeGreaterThan(0);
 
     // None of DatabaseSeeder's demo/dummy data made it in.

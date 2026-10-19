@@ -18,6 +18,8 @@ new class extends Component
 
     public ?string $manual_amount = null;
 
+    public ?string $manual_cost_amount = null;
+
     public ?string $manual_description = null;
 
     public ?string $vatRate = null;
@@ -45,6 +47,7 @@ new class extends Component
             'invoice_number' => ['required', 'string', 'max:255', Rule::unique('invoices', 'invoice_number')],
             'bill_date' => ['required', 'date'],
             'manual_amount' => ['required', 'numeric', 'min:0.01'],
+            'manual_cost_amount' => ['nullable', 'numeric', 'min:0'],
             'manual_description' => ['nullable', 'string', 'max:255'],
             'vatRate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'remarks' => ['nullable', 'string', 'max:2000'],
@@ -59,6 +62,7 @@ new class extends Component
             'status' => 'due',
             'vat_percent' => $validated['vatRate'] !== null && trim((string) $validated['vatRate']) !== '' ? (float) $validated['vatRate'] : null,
             'manual_amount' => $validated['manual_amount'],
+            'manual_cost_amount' => $validated['manual_cost_amount'] !== null && trim((string) $validated['manual_cost_amount']) !== '' ? $validated['manual_cost_amount'] : null,
             'manual_description' => $validated['manual_description'] ? trim($validated['manual_description']) : null,
             'remarks' => $validated['remarks'] ? trim($validated['remarks']) : null,
             'created_by' => auth()->id(),
@@ -130,6 +134,13 @@ new class extends Component
         <x-input-label for="manual_amount" value="Amount" />
         <x-text-input wire:model="manual_amount" id="manual_amount" type="number" step="0.01" min="0.01" placeholder="e.g. 50000.00" class="mt-1 block w-full" required />
         <x-input-error :messages="$errors->get('manual_amount')" class="mt-2" />
+    </div>
+
+    <div>
+        <x-input-label for="manual_cost_amount" value="Total Cost (optional)" />
+        <x-text-input wire:model="manual_cost_amount" id="manual_cost_amount" type="number" step="0.01" min="0" placeholder="e.g. 42000.00" class="mt-1 block w-full" />
+        <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">What this bill actually cost — leave blank if unknown. Lets the invoice show its profit (Amount − Total Cost).</p>
+        <x-input-error :messages="$errors->get('manual_cost_amount')" class="mt-2" />
     </div>
 
     <div>

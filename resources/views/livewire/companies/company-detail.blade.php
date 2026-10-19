@@ -34,20 +34,26 @@ new class extends Component
             ->orderByDesc('id')
             ->limit(30)
             ->get()
-            ->groupBy(fn (JobEntry $entry) => $entry->tiffin_department_id
+            // tiffin_department_id is also reused for Simba Fashion's
+            // per-unit Daily Basic Labour entries — only an actual Tiffin
+            // entry collapses into the batch card/link below, or a Daily
+            // Basic Labour entry would wrongly point at the Tiffin batch
+            // editor.
+            ->groupBy(fn (JobEntry $entry) => ($entry->tiffin_department_id && $entry->serviceCategory->name === 'Tiffin')
                 ? "tiffin-{$entry->tiffin_department_id}-{$entry->entry_date->toDateString()}"
                 : "single-{$entry->id}")
             ->map(function ($group) {
                 $first = $group->first();
+                $isTiffinBatch = $first->tiffin_department_id && $first->serviceCategory->name === 'Tiffin';
 
                 return (object) [
                     'entry_date' => $first->entry_date,
                     'serviceCategory' => $first->serviceCategory,
-                    'label' => $first->tiffin_department_id ? $first->tiffinDepartment->name : $first->supply_type,
-                    'items' => $first->tiffin_department_id ? $group->pluck('supply_type')->unique()->sort()->implode(', ') : null,
+                    'label' => $isTiffinBatch ? $first->tiffinDepartment->name : $first->supply_type,
+                    'items' => $isTiffinBatch ? $group->pluck('supply_type')->unique()->sort()->implode(', ') : null,
                     'billAmount' => (float) $group->sum('bill_amount'),
                     'isBilled' => $group->contains(fn (JobEntry $entry) => $entry->isBilled),
-                    'editUrl' => $first->tiffin_department_id
+                    'editUrl' => $isTiffinBatch
                         ? route('job-entries.batch-edit', [
                             'company' => $first->company_id,
                             'tiffinDepartment' => $first->tiffin_department_id,

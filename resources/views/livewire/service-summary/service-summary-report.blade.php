@@ -20,11 +20,11 @@ new class extends Component
     #[Url(as: 'category', history: true)]
     public string $categoryFilter = '';
 
-    #[Url(as: 'period', history: true)]
-    public string $period = 'daily';
+    #[Url(as: 'from', history: true)]
+    public string $fromDate = '';
 
-    #[Url(as: 'date', history: true)]
-    public string $referenceDate = '';
+    #[Url(as: 'to', history: true)]
+    public string $toDate = '';
 
     /**
      * Captured once in mount() — a manually-built LengthAwarePaginator needs
@@ -36,8 +36,12 @@ new class extends Component
 
     public function mount(): void
     {
-        if ($this->referenceDate === '') {
-            $this->referenceDate = now()->toDateString();
+        if ($this->fromDate === '' && $this->toDate === '') {
+            // Month-to-date — the most useful default, and never shows
+            // blank rows for days that haven't happened yet.
+            [$start, $end] = $this->presetRanges()['this_month'];
+            $this->fromDate = $start->toDateString();
+            $this->toDate = $end->toDateString();
         }
 
         $this->paginationPath = request()->url();
@@ -53,40 +57,47 @@ new class extends Component
         $this->resetPage();
     }
 
-    public function setPeriod(string $period): void
+    public function updatingFromDate(): void
     {
-        $this->period = $period;
         $this->resetPage();
     }
 
-    public function goToPreviousPeriod(): void
+    public function updatingToDate(): void
     {
-        $ref = Carbon::parse($this->referenceDate);
-
-        $this->referenceDate = match ($this->period) {
-            'weekly' => $ref->subWeek()->toDateString(),
-            'monthly' => $ref->subMonthNoOverflow()->toDateString(),
-            default => $ref->subDay()->toDateString(),
-        };
-
         $this->resetPage();
     }
 
-    public function goToNextPeriod(): void
+    /**
+     * Every preset ends at today rather than running into the future, so
+     * "This Week"/"This Month" never show a wall of empty, not-yet-happened
+     * days — only "Last 7/30 Days" and "Today" need a fixed start.
+     *
+     * @return array<string, array{0: Carbon, 1: Carbon}>
+     */
+    private function presetRanges(): array
     {
-        $ref = Carbon::parse($this->referenceDate);
+        $today = now()->startOfDay();
 
-        $this->referenceDate = match ($this->period) {
-            'weekly' => $ref->addWeek()->toDateString(),
-            'monthly' => $ref->addMonthNoOverflow()->toDateString(),
-            default => $ref->addDay()->toDateString(),
-        };
-
-        $this->resetPage();
+        return [
+            'today' => [$today->copy(), $today->copy()],
+            'this_week' => [$today->copy()->startOfWeek(), $today->copy()],
+            'this_month' => [$today->copy()->startOfMonth(), $today->copy()],
+            'last_7_days' => [$today->copy()->subDays(6), $today->copy()],
+            'last_30_days' => [$today->copy()->subDays(29), $today->copy()],
+        ];
     }
 
-    public function updatingReferenceDate(): void
+    public function applyPreset(string $preset): void
     {
+        $range = $this->presetRanges()[$preset] ?? null;
+
+        if (! $range) {
+            return;
+        }
+
+        [$start, $end] = $range;
+        $this->fromDate = $start->toDateString();
+        $this->toDate = $end->toDateString();
         $this->resetPage();
     }
 
@@ -103,37 +114,46 @@ new class extends Component
         return array_filter([
             'company' => $this->companyFilter,
             'category' => $this->categoryFilter,
-            'period' => $this->period,
-            'date' => $this->referenceDate,
+            'from' => $this->fromDate,
+            'to' => $this->toDate,
         ], fn ($value) => $value !== '');
     }
 
     /**
      * @return array{0: Carbon, 1: Carbon}
      */
-    private function periodRange(): array
+    private function selectedRange(): array
     {
-        $ref = Carbon::parse($this->referenceDate);
+        $start = Carbon::parse($this->fromDate ?: now());
+        $end = Carbon::parse($this->toDate ?: now());
 
-        return match ($this->period) {
-            'weekly' => [$ref->copy()->startOfWeek(), $ref->copy()->endOfWeek()],
-            'monthly' => [$ref->copy()->startOfMonth(), $ref->copy()->endOfMonth()],
-            default => [$ref->copy(), $ref->copy()],
-        };
+        // A To date picked before From would otherwise query an empty,
+        // backwards range — swap them instead of silently showing nothing.
+        return $end->lt($start) ? [$end, $start] : [$start, $end];
     }
 
     public function with(): array
     {
-        // 31 (not 30) so every calendar month — including the five with 31
-        // days — always fits on a single page.
+        // 31 (not 30) so a full calendar month always fits on one page —
+        // a longer custom range simply spans more pages, same as before.
         $perPage = 31;
         $days = new LengthAwarePaginator([], 0, $perPage, null, ['path' => $this->paginationPath]);
         $totals = ['cost' => 0.0, 'bill' => 0.0, 'profit' => 0.0];
 
-        [$start, $end] = $this->periodRange();
+        [$start, $end] = $this->selectedRange();
         $rangeLabel = $start->isSameDay($end)
             ? $start->format('l, d F Y')
             : $start->format('d M Y').' – '.$end->format('d M Y');
+
+        // Highlights a preset chip only when the picked range exactly
+        // matches it — any hand-edited range correctly highlights none.
+        $activePreset = null;
+        foreach ($this->presetRanges() as $key => [$presetStart, $presetEnd]) {
+            if ($presetStart->toDateString() === $this->fromDate && $presetEnd->toDateString() === $this->toDate) {
+                $activePreset = $key;
+                break;
+            }
+        }
 
         $selectedCategory = $this->categoryFilter
             ? ServiceCategory::find($this->categoryFilter)
@@ -146,12 +166,14 @@ new class extends Component
                 ->where('service_category_id', $selectedCategory->id)
                 ->whereDate('entry_date', '>=', $start)
                 ->whereDate('entry_date', '<=', $end)
-                ->when($isTiffin, fn ($query) => $query->with('tiffinDepartment'))
+                // Also needed outside Tiffin for Simba Fashion's per-unit
+                // Daily Basic Labour entries, which reuse the same field.
+                ->with(['tiffinDepartment', 'collectedFromCompany'])
                 ->get();
 
             // Every day keeps its own row here (rather than one blended
-            // total for the whole period), so a Weekly/Monthly view still
-            // shows day-by-day detail.
+            // total for the whole range), so a multi-day range still shows
+            // day-by-day detail.
             $allDays = $entries
                 ->groupBy(fn (JobEntry $entry) => $entry->entry_date->toDateString())
                 ->map(function ($dayEntries, $dateString) use ($isTiffin) {
@@ -170,7 +192,7 @@ new class extends Component
                 ->sortBy(fn ($day) => $day['date'])
                 ->values();
 
-            // Totals always reflect every day in the period, never just the
+            // Totals always reflect every day in the range, never just the
             // page currently on screen — a paginated slice must not silently
             // understate the Grand Total.
             $totals = [
@@ -198,6 +220,7 @@ new class extends Component
             'selectedCategory' => $selectedCategory,
             'days' => $days,
             'rangeLabel' => $rangeLabel,
+            'activePreset' => $activePreset,
             'totals' => $totals,
         ];
     }
@@ -243,16 +266,24 @@ new class extends Component
      * non-Tiffin branch.
      *
      * @param  Collection<int, JobEntry>  $dayEntries
-     * @return Collection<int, array{label: string, detail: ?string, quantity: float, costRate: float, billRate: float, cost: float, bill: float, profit: float}>
+     * @return Collection<int, array{label: string, detail: ?string, quantity: float, costRate: float, billRate: float, cost: float, bill: float, profit: float, shipmentTiffinCost: float}>
      */
     private function plainRowsForDay(Collection $dayEntries): Collection
     {
         return $dayEntries->map(function (JobEntry $entry) {
             $detail = collect([
+                // Simba Fashion's per-unit Daily Basic Labour entries reuse
+                // tiffin_department_id for the unit — shown here since this
+                // report mixes every unit together under one company.
+                $entry->tiffin_department_id ? $entry->tiffinDepartment->name : null,
                 $entry->buyer,
                 $entry->style ? "Style {$entry->style}" : null,
                 $entry->floor,
+                // Combustible Material only — which company it was
+                // collected from.
+                $entry->collected_from_company_id ? "Collected from {$entry->collectedFromCompany->name}" : null,
                 $entry->challan_no ? "Challan {$entry->challan_no}" : null,
+                $entry->remarks,
             ])->filter()->implode(' — ');
 
             return [
@@ -261,9 +292,16 @@ new class extends Component
                 'quantity' => (float) $entry->quantity,
                 'costRate' => (float) $entry->cost_rate,
                 'billRate' => (float) $entry->bill_rate,
-                'cost' => (float) $entry->cost_amount,
+                // Loading Unloading only — Shipment Tiffin Cost is a real
+                // cost (feeding labourers on the shipment) that's never
+                // billed to the factory. It's folded in here so Cost +
+                // Profit reconciles to Bill at a glance — profit_amount
+                // already has it subtracted underneath, so this isn't
+                // double-counted, just surfaced in Cost too.
+                'cost' => (float) $entry->cost_amount + (float) $entry->shipment_tiffin_cost,
                 'bill' => (float) $entry->bill_amount,
                 'profit' => (float) $entry->profit_amount,
+                'shipmentTiffinCost' => (float) $entry->shipment_tiffin_cost,
             ];
         })->values();
     }
@@ -271,17 +309,7 @@ new class extends Component
 
 <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-4">
-        <nav class="flex gap-4 border-b border-slate-200 dark:border-slate-700">
-            @foreach (['daily' => 'Daily', 'weekly' => 'Weekly', 'monthly' => 'Monthly'] as $value => $label)
-                <button
-                    type="button"
-                    wire:click="setPeriod('{{ $value }}')"
-                    class="border-b-2 px-1 pb-2 text-sm font-medium {{ $period === $value ? 'border-brand-600 text-brand-600 dark:border-brand-400 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
-                >
-                    {{ $label }}
-                </button>
-            @endforeach
-        </nav>
+        <h2 class="text-base font-semibold text-slate-900 dark:text-white">Service Summary</h2>
 
         <div class="flex flex-wrap items-center gap-3">
             <x-select-input wire:model.live="companyFilter" class="w-full sm:w-56">
@@ -301,32 +329,37 @@ new class extends Component
     </div>
 
     @if ($companyFilter && $selectedCategory)
-        <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-            <div class="flex items-center gap-2">
-                <button
-                    type="button"
-                    wire:click="goToPreviousPeriod"
-                    class="rounded-md border border-slate-300 p-1.5 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700"
-                    aria-label="Previous {{ $period }}"
-                >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" /></svg>
-                </button>
-                <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $rangeLabel }}</span>
-                <button
-                    type="button"
-                    wire:click="goToNextPeriod"
-                    class="rounded-md border border-slate-300 p-1.5 text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700"
-                    aria-label="Next {{ $period }}"
-                >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
-                </button>
+        <div class="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <div class="flex flex-wrap gap-2">
+                @foreach (['today' => 'Today', 'this_week' => 'This Week', 'this_month' => 'This Month', 'last_7_days' => 'Last 7 Days', 'last_30_days' => 'Last 30 Days'] as $value => $label)
+                    <button
+                        type="button"
+                        wire:click="applyPreset('{{ $value }}')"
+                        class="rounded-full border px-3 py-1 text-xs font-medium {{ $activePreset === $value ? 'border-brand-600 bg-brand-50 text-brand-700 dark:border-brand-400 dark:bg-brand-900/30 dark:text-brand-300' : 'border-slate-300 text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700' }}"
+                    >
+                        {{ $label }}
+                    </button>
+                @endforeach
             </div>
 
-            <x-text-input wire:model.live="referenceDate" type="date" class="w-full sm:w-48" />
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <span class="text-sm font-medium text-slate-700 dark:text-slate-200">{{ $rangeLabel }}</span>
+
+                <div class="flex flex-wrap items-center gap-3">
+                    <div class="flex items-center gap-2">
+                        <label for="from_date" class="text-xs font-medium text-slate-500 dark:text-slate-400">From</label>
+                        <x-text-input wire:model.live="fromDate" id="from_date" type="date" class="w-full sm:w-40" />
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <label for="to_date" class="text-xs font-medium text-slate-500 dark:text-slate-400">To</label>
+                        <x-text-input wire:model.live="toDate" id="to_date" type="date" class="w-full sm:w-40" />
+                    </div>
+                </div>
+            </div>
         </div>
 
         @if ($days->isEmpty())
-            <x-empty-state title="Nothing recorded for this period" :message="'No '.$selectedCategory->name.' entries were found for this company in this date range.'" />
+            <x-empty-state title="Nothing recorded for this range" :message="'No '.$selectedCategory->name.' entries were found for this company in this date range.'" />
         @else
             <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-800">
                 <table class="w-full min-w-[720px] text-sm">
@@ -355,6 +388,9 @@ new class extends Component
                                         {{ $row['label'] }}
                                         @if ($row['detail'])
                                             <span class="text-xs text-slate-400 dark:text-slate-500">— {{ $row['detail'] }}</span>
+                                        @endif
+                                        @if (($row['shipmentTiffinCost'] ?? 0) > 0)
+                                            <span class="block text-xs text-amber-600 dark:text-amber-400">Shipment Tiffin Cost: {{ number_format($row['shipmentTiffinCost'], 2) }}</span>
                                         @endif
                                     </td>
                                     <td class="px-4 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format($row['quantity'], 2) }}</td>

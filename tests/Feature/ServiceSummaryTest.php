@@ -10,7 +10,7 @@ test('guests are redirected to login', function () {
     $this->get('/service-summary')->assertRedirect('/login');
 });
 
-test('the daily period shows one row per department for Tiffin on a single day', function () {
+test('a single-day range shows one row per department for Tiffin on that day', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $tiffin = makeServiceCategory('Tiffin');
@@ -40,7 +40,7 @@ test('the daily period shows one row per department for Tiffin on a single day',
         'cost_amount' => 829.5,
         'bill_amount' => 1200,
     ]);
-    // A different day must not leak into the daily view.
+    // A different day must not leak into a single-day range.
     JobEntry::factory()->create([
         'company_id' => $company->id,
         'service_category_id' => $tiffin->id,
@@ -54,8 +54,8 @@ test('the daily period shows one row per department for Tiffin on a single day',
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'daily')
-        ->set('referenceDate', '2026-08-15')
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
         ->assertSee('Swing')
         ->assertSee('Banana, Egg', false)
         ->assertSee('40.00')
@@ -63,13 +63,12 @@ test('the daily period shows one row per department for Tiffin on a single day',
         ->assertDontSee('999.00');
 });
 
-test('the weekly period shows every day in that week as its own row, with a grand total', function () {
+test('a multi-day range shows every day inside it as its own row, with a grand total', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $tiffin = makeServiceCategory('Tiffin');
     $swing = TiffinDepartment::create(['name' => 'Swing']);
 
-    // 2026-08-10 is a Monday — both days fall in the same week.
     JobEntry::factory()->create([
         'company_id' => $company->id,
         'service_category_id' => $tiffin->id,
@@ -92,7 +91,7 @@ test('the weekly period shows every day in that week as its own row, with a gran
         'bill_amount' => 900,
         'cost_amount' => 600,
     ]);
-    // The following week must not be included.
+    // Outside the chosen range — must not be included.
     JobEntry::factory()->create([
         'company_id' => $company->id,
         'service_category_id' => $tiffin->id,
@@ -106,12 +105,12 @@ test('the weekly period shows every day in that week as its own row, with a gran
     $component = Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'weekly')
-        ->set('referenceDate', '2026-08-11');
+        ->set('fromDate', '2026-08-10')
+        ->set('toDate', '2026-08-16');
 
     $component
         // Both days appear as their own rows/headers, not collapsed into
-        // one summed row for the week.
+        // one summed row for the range.
         ->assertSeeInOrder(['Monday, 10 August 2026', 'Wednesday, 12 August 2026'])
         // Each day keeps its own headcount and bill.
         ->assertSee('40.00')
@@ -122,7 +121,7 @@ test('the weekly period shows every day in that week as its own row, with a gran
         ->assertDontSee('5,000.00');
 });
 
-test('the monthly period shows every day in that month as its own row, with a grand total', function () {
+test('a whole-month range shows every day in that month as its own row, with a grand total', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $tiffin = makeServiceCategory('Tiffin');
@@ -164,8 +163,8 @@ test('the monthly period shows every day in that month as its own row, with a gr
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'monthly')
-        ->set('referenceDate', '2026-08-15')
+        ->set('fromDate', '2026-08-01')
+        ->set('toDate', '2026-08-31')
         // Both days appear as their own rows/headers, not collapsed into
         // one summed row for the month.
         ->assertSeeInOrder(['Saturday, 01 August 2026', 'Monday, 31 August 2026'])
@@ -207,8 +206,8 @@ test('every day of a 31 day month fits on a single page', function () {
     $component = Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'monthly')
-        ->set('referenceDate', '2026-08-15');
+        ->set('fromDate', '2026-08-01')
+        ->set('toDate', '2026-08-31');
 
     // All 31 days render on page 1...
     expect($component->viewData('days'))->toHaveCount(31);
@@ -241,11 +240,11 @@ test('changing a filter resets pagination back to the first page', function () {
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'monthly')
-        ->set('referenceDate', '2026-08-15')
+        ->set('fromDate', '2026-08-01')
+        ->set('toDate', '2026-08-15')
         ->call('setPage', 2)
         ->assertSet('paginators.page', 2)
-        ->set('referenceDate', '2026-08-16')
+        ->set('toDate', '2026-08-16')
         ->assertSet('paginators.page', 1);
 });
 
@@ -272,31 +271,202 @@ test('changing the category resets pagination back to the first page', function 
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'monthly')
-        ->set('referenceDate', '2026-08-15')
+        ->set('fromDate', '2026-08-01')
+        ->set('toDate', '2026-08-15')
         ->call('setPage', 2)
         ->assertSet('paginators.page', 2)
         ->set('categoryFilter', (string) $labour->id)
         ->assertSet('paginators.page', 1);
 });
 
-test('navigating to the previous and next period moves the reference date by the selected period', function () {
+test('loading the page with no range in the URL defaults to month-to-date', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
     $tiffin = makeServiceCategory('Tiffin');
 
     $this->actingAs($user);
 
+    $component = Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $tiffin->id);
+
+    $component
+        ->assertSet('fromDate', now()->startOfMonth()->toDateString())
+        ->assertSet('toDate', now()->toDateString());
+});
+
+test('the today preset shows only todays entries', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 1000,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->subDay()->toDateString(),
+        'bill_amount' => 9999,
+    ]);
+
+    $this->actingAs($user);
+
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
-        ->set('categoryFilter', (string) $tiffin->id)
-        ->set('period', 'monthly')
-        ->set('referenceDate', '2026-08-15')
-        ->call('goToNextPeriod')
-        ->assertSet('referenceDate', '2026-09-15')
-        ->call('goToPreviousPeriod')
-        ->call('goToPreviousPeriod')
-        ->assertSet('referenceDate', '2026-07-15');
+        ->set('categoryFilter', (string) $labour->id)
+        ->call('applyPreset', 'today')
+        ->assertSet('fromDate', now()->toDateString())
+        ->assertSet('toDate', now()->toDateString())
+        ->assertSee('1,000.00')
+        ->assertDontSee('9,999.00');
+});
+
+test('the last 7 days preset includes exactly the last 7 days, not the 8th day back', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->subDays(6)->toDateString(),
+        'bill_amount' => 1000,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->subDays(8)->toDateString(),
+        'bill_amount' => 9999,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $labour->id)
+        ->call('applyPreset', 'last_7_days')
+        ->assertSee('1,000.00')
+        ->assertDontSee('9,999.00');
+});
+
+test('the last 30 days preset includes exactly the last 30 days, not the 31st day back', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->subDays(29)->toDateString(),
+        'bill_amount' => 1000,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->subDays(31)->toDateString(),
+        'bill_amount' => 9999,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $labour->id)
+        ->call('applyPreset', 'last_30_days')
+        ->assertSee('1,000.00')
+        ->assertDontSee('9,999.00');
+});
+
+test('a preset is highlighted as active only when the picked range matches it exactly', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    $this->actingAs($user);
+
+    $component = Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $labour->id)
+        ->call('applyPreset', 'today');
+
+    expect($component->viewData('activePreset'))->toBe('today');
+
+    // Hand-editing the From date breaks the match — no preset is "active"
+    // once the range no longer corresponds to one.
+    $component->set('fromDate', now()->subDays(3)->toDateString());
+    expect($component->viewData('activePreset'))->toBeNull();
+});
+
+test('a custom date range shows every day inside it, inclusive of both endpoints', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => '2026-08-05',
+        'bill_amount' => 1000,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => '2026-08-10',
+        'bill_amount' => 500,
+    ]);
+    // Outside the chosen range on both sides — neither may leak in.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => '2026-08-04',
+        'bill_amount' => 9999,
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => '2026-08-11',
+        'bill_amount' => 8888,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $labour->id)
+        ->set('fromDate', '2026-08-05')
+        ->set('toDate', '2026-08-10')
+        ->assertSee('1,000.00')
+        ->assertSee('500.00')
+        // Grand Total: 1,000 + 500, never the out-of-range entries.
+        ->assertSee('1,500.00')
+        ->assertDontSee('9,999.00')
+        ->assertDontSee('8,888.00');
+});
+
+test('a range where To is before From is swapped instead of showing nothing', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => '2026-08-07',
+        'bill_amount' => 750,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $labour->id)
+        ->set('fromDate', '2026-08-10')
+        ->set('toDate', '2026-08-05')
+        ->assertSee('750.00');
 });
 
 test('a non tiffin category shows one row per entry, not grouped by department', function () {
@@ -334,8 +504,8 @@ test('a non tiffin category shows one row per entry, not grouped by department',
     $component = Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $labour->id)
-        ->set('period', 'daily')
-        ->set('referenceDate', '2026-08-15');
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15');
 
     $days = $component->viewData('days');
     expect($days->first()['rows'])->toHaveCount(2);
@@ -346,6 +516,90 @@ test('a non tiffin category shows one row per entry, not grouped by department',
         ->assertSee('3,250.00')
         // Grand Total: 6,500 + 3,250.
         ->assertSee('9,750.00');
+});
+
+test('a loading unloading entrys shipment tiffin cost is shown, and reflected in profit', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $loadingUnloading = makeServiceCategory('Loading Unloading');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $loadingUnloading->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Big',
+        'quantity' => 18,
+        'cost_rate' => 700,
+        'bill_rate' => 850,
+        'cost_amount' => 12600,
+        'bill_amount' => 15300,
+        'shipment_tiffin_cost' => 500,
+        'profit_amount' => 2200, // 15300 - 12600 - 500
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $loadingUnloading->id)
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
+        ->assertSee('Shipment Tiffin Cost: 500.00', false)
+        // Cost includes the shipment cost (12,600 + 500) so Cost + Profit
+        // reconciles to Bill at a glance — never added to Bill itself.
+        ->assertSee('13,100.00')
+        ->assertDontSee('15,800.00')
+        // Profit already has the shipment cost deducted (2,700 - 500).
+        ->assertSee('2,200.00')
+        // Bill is untouched by the shipment cost.
+        ->assertSee('15,300.00');
+});
+
+test('an entry with no shipment tiffin cost shows no shipment cost note', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $loadingUnloading = makeServiceCategory('Loading Unloading');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $loadingUnloading->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Big',
+        'shipment_tiffin_cost' => null,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $loadingUnloading->id)
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
+        ->assertDontSee('Shipment Tiffin Cost');
+});
+
+test('an entrys remarks are shown beside the item name', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Diesel',
+        'remarks' => 'Delivered late due to road closure',
+        'bill_amount' => 5000,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $category->id)
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
+        ->assertSee('Delivered late due to road closure');
 });
 
 test('a category with extra fields shows them beside the item name', function () {
@@ -368,10 +622,62 @@ test('a category with extra fields shows them beside the item name', function ()
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $embroidery->id)
-        ->set('period', 'daily')
-        ->set('referenceDate', '2026-08-15')
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
         ->assertSee('Embroidery Work')
         ->assertSee('American Eagle — Style 6856', false);
+});
+
+test('a Combustible Material entrys collected-from company is shown beside the item name', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $source = Company::factory()->create(['name' => 'Some Textile Factory']);
+    $combustible = makeServiceCategory('Combustible Material');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $combustible->id,
+        'collected_from_company_id' => $source->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Floor Dust',
+        'bill_amount' => 3654,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $combustible->id)
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
+        ->assertSee('Floor Dust')
+        ->assertSee('Collected from Some Textile Factory');
+});
+
+test('a Simba Daily Basic Labour entrys unit is shown beside the item name', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'SFL']);
+    $labour = makeServiceCategory('Daily Basic Labour');
+    $unit1 = TiffinDepartment::create(['name' => 'Simba Unit-01']);
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'tiffin_department_id' => $unit1->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Daily Basic Labour',
+        'bill_amount' => 6500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('service-summary.service-summary-report')
+        ->set('companyFilter', (string) $company->id)
+        ->set('categoryFilter', (string) $labour->id)
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
+        ->assertSee('Daily Basic Labour')
+        ->assertSee('Simba Unit-01');
 });
 
 test('selecting a category excludes every other categorys entries for the same company and day', function () {
@@ -398,8 +704,8 @@ test('selecting a category excludes every other categorys entries for the same c
     Volt::test('service-summary.service-summary-report')
         ->set('companyFilter', (string) $company->id)
         ->set('categoryFilter', (string) $labour->id)
-        ->set('period', 'daily')
-        ->set('referenceDate', '2026-08-15')
+        ->set('fromDate', '2026-08-15')
+        ->set('toDate', '2026-08-15')
         ->assertSee('1,000.00')
         ->assertDontSee('9,999.00');
 });

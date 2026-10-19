@@ -170,6 +170,7 @@ test('a purchase remarks is shown on its row in the purchases list', function ()
     $this->actingAs($user);
 
     Volt::test('egg-purchases.purchase-manager')
+        ->set('yearFilter', '')
         ->call('startCreate')
         ->set('tiffin_item_id', $egg->id)
         ->set('purchase_date', '2026-09-02')

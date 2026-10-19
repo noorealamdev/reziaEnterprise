@@ -234,7 +234,7 @@ new class extends Component
         $walletLabel = SajjatTransaction::WALLETS[$validated['pay_wallet']];
 
         $recorded = DB::transaction(function () use ($validated, $newspaper, $forMonth, $walletLabel): bool {
-            // The newspapers are paid out of Sazzad's topped-up money, so
+            // The newspapers are paid out of Sajjat's topped-up money, so
             // the payment can only go through if that wallet can cover it.
             // Checked inside the transaction, right before the expense is
             // written, so two payments can't both spend the same balance.
@@ -269,7 +269,7 @@ new class extends Component
 
         if (! $recorded) {
             $available = SajjatTransaction::balances()[$validated['pay_wallet']];
-            $this->addError('pay_amount', "Not enough {$walletLabel} balance — only ".number_format($available, 2).' available. Top up Sazzad first, or pay from the other wallet.');
+            $this->addError('pay_amount', "Not enough {$walletLabel} balance — only ".number_format($available, 2).' available. Top up Sajjat first, or pay from the other wallet.');
 
             return;
         }
@@ -299,7 +299,7 @@ new class extends Component
         $payment = $this->confirmingPaymentDeleteId ? NewspaperPayment::find($this->confirmingPaymentDeleteId) : null;
 
         if ($payment) {
-            // Removing the payment also removes its expense from Sazzad's
+            // Removing the payment also removes its expense from Sajjat's
             // ledger, which puts the money back in his wallet.
             DB::transaction(function () use ($payment) {
                 $payment->delete();
@@ -315,7 +315,7 @@ new class extends Component
     /**
      * Sends the alert straight to the browser's toast stack in this same
      * response, rather than through the session flash the layout polls for —
-     * same reasoning as the Sazzad wallet page.
+     * same reasoning as the Sajjat wallet page.
      */
     private function notify(string $message, string $type = 'success'): void
     {
@@ -609,7 +609,7 @@ new class extends Component
             </div>
 
             <div>
-                <x-input-label value="Pay from Sazzad's" />
+                <x-input-label value="Pay from Sajjat's" />
                 <div class="mt-1 flex flex-wrap gap-4">
                     @foreach ($wallets as $key => $label)
                         <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
@@ -619,7 +619,7 @@ new class extends Component
                         </label>
                     @endforeach
                 </div>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The amount is deducted from this wallet. If it isn't enough, top up Sazzad first.</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The amount is deducted from this wallet. If it isn't enough, top up Sajjat first.</p>
                 <x-input-error :messages="$errors->get('pay_wallet')" class="mt-2" />
             </div>
 
@@ -689,7 +689,7 @@ new class extends Component
         <div class="p-6">
             <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Delete this payment?</h2>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                The month's paid total will be recalculated and the amount goes back into Sazzad's wallet. This cannot be undone.
+                The month's paid total will be recalculated and the amount goes back into Sajjat's wallet. This cannot be undone.
             </p>
             <div class="mt-6 flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>

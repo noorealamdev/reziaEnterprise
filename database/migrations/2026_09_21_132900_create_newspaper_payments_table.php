@@ -18,7 +18,7 @@ return new class extends Migration
             $table->date('for_month');
             $table->decimal('amount', 10, 2);
             $table->date('paid_on');
-            // Paid out of Sazzad's balance: which wallet it came from, and the
+            // Paid out of Sajjat's balance: which wallet it came from, and the
             // matching expense in his ledger — so the wallet balance drops by
             // exactly this amount and stays the single source of truth.
             $table->string('wallet', 20);

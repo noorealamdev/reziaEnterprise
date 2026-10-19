@@ -26,8 +26,8 @@ return new class extends Migration
             $table->timestamps();
         });
 
-        // Whoever already has Sazzad access gets the same level of access to
-        // the Newspapers page, so the person using Sazzad can use it straight
+        // Whoever already has Sajjat access gets the same level of access to
+        // the Newspapers page, so the person using Sajjat can use it straight
         // away; it can still be changed in Settings → Roles & Permissions.
         foreach (['view', 'create', 'modify'] as $level) {
             DB::table('role_permissions')

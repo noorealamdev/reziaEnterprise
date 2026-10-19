@@ -45,6 +45,14 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
+
+        if ($this->yearFilter === '') {
+            $this->yearFilter = (string) now()->year;
+        }
+
+        if ($this->monthFilter === '') {
+            $this->monthFilter = (string) now()->month;
+        }
     }
 
     public function updatingCompanyFilter(): void
@@ -143,7 +151,7 @@ new class extends Component
         $pageDates = collect($jobEntries->items())->map(fn (JobEntry $row) => $row->entry_date->toDateString());
 
         $entriesForGrouping = (clone $baseQuery)
-            ->with(['company', 'serviceCategory', 'tiffinDepartment'])
+            ->with(['company', 'serviceCategory', 'tiffinDepartment', 'collectedFromCompany'])
             // entry_date is stored with a time component (Laravel's `date`
             // cast writes the full datetime format), so a raw string
             // whereIn against $pageDates (plain Y-m-d strings) would never
@@ -167,7 +175,10 @@ new class extends Component
             ->groupBy(fn (JobEntry $entry) => $entry->entry_date->toDateString())
             ->map(fn ($entriesForDate) => $entriesForDate
                 ->groupBy(function (JobEntry $entry) {
-                    if ($entry->tiffin_department_id) {
+                    // tiffin_department_id is also reused for Simba Fashion's
+                    // per-unit Daily Basic Labour entries — only an actual
+                    // Tiffin entry groups into the department-sectioned card.
+                    if ($entry->tiffin_department_id && $entry->serviceCategory->name === 'Tiffin') {
                         return "tiffin-{$entry->company_id}";
                     }
 
@@ -245,7 +256,7 @@ new class extends Component
                 @foreach ($rowGroups as $group)
                     @php $first = $group->first(); @endphp
 
-                    @if ($first->tiffin_department_id)
+                    @if ($first->tiffin_department_id && $first->serviceCategory->name === 'Tiffin')
                         {{-- Tiffin: one card per company/day covering every department, one sub-section per department --}}
                         <div class="p-4">
                             <div class="flex flex-wrap items-center justify-between gap-3">
@@ -343,7 +354,11 @@ new class extends Component
                                         <span class="text-slate-600 dark:text-slate-400">
                                             <span class="font-medium text-slate-700 dark:text-slate-300">{{ $item->supply_type }}</span>
                                             · Qty {{ rtrim(rtrim(number_format((float) $item->quantity, 2), '0'), '.') }}{{ $item->unit_label ? ' '.$item->unit_label : '' }}
-                                            · Cost {{ number_format((float) $item->cost_amount, 2) }} · Profit {{ number_format((float) $item->profit_amount, 2) }}
+                                            {{-- Shipment Tiffin Cost is a real cost (feeding labourers on the
+                                            shipment), folded in here so Cost + Profit reconciles to Bill at a
+                                            glance — it's never billed to the factory, so it still only ever
+                                            came off Profit underneath, this just surfaces it in Cost too. --}}
+                                            · Cost {{ number_format((float) $item->cost_amount + (float) $item->shipment_tiffin_cost, 2) }} · Profit {{ number_format((float) $item->profit_amount, 2) }}
                                         </span>
                                         <span class="flex items-center gap-2 font-medium text-slate-700 dark:text-slate-300">
                                             {{ number_format((float) $item->bill_amount, 2) }}
@@ -379,6 +394,12 @@ new class extends Component
                                     @if ($first->floor)
                                         {{ $first->floor }} ·
                                     @endif
+                                    @if ($first->collected_from_company_id)
+                                        Collected from {{ $first->collectedFromCompany->name }} ·
+                                    @endif
+                                    @if ($first->tiffin_department_id)
+                                        {{ $first->tiffinDepartment->name }} ·
+                                    @endif
                                     @if ($first->challan_no)
                                         Challan {{ $first->challan_no }} ·
                                     @endif
@@ -386,7 +407,7 @@ new class extends Component
                                         Qty {{ rtrim(rtrim(number_format((float) $first->quantity, 2), '0'), '.') }}{{ $first->unit_label ? ' '.$first->unit_label : '' }} ·
                                     @endif
                                     Rate {{ number_format((float) $first->bill_rate, 2) }} ·
-                                    Cost {{ number_format((float) $first->cost_amount, 2) }} · Profit {{ number_format((float) $first->profit_amount, 2) }}
+                                    Cost {{ number_format((float) $first->cost_amount + (float) $first->shipment_tiffin_cost, 2) }} · Profit {{ number_format((float) $first->profit_amount, 2) }}
                                 </p>
                                 @if ($first->shipment_tiffin_cost)
                                     <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Shipment Tiffin Cost: {{ number_format((float) $first->shipment_tiffin_cost, 2) }}</p>

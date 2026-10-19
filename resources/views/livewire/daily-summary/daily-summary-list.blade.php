@@ -21,6 +21,12 @@ new class extends Component
     #[Url(as: 'month', history: true)]
     public string $monthFilter = '';
 
+    #[Url(as: 'from', history: true)]
+    public string $fromDate = '';
+
+    #[Url(as: 'to', history: true)]
+    public string $toDate = '';
+
     /**
      * Captured once in mount() — a manually-built LengthAwarePaginator needs
      * an explicit 'path', and request()->url() would otherwise resolve to
@@ -32,6 +38,14 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
+
+        if ($this->yearFilter === '') {
+            $this->yearFilter = (string) now()->year;
+        }
+
+        if ($this->monthFilter === '') {
+            $this->monthFilter = (string) now()->month;
+        }
     }
 
     public function updatingCompanyFilter(): void
@@ -52,6 +66,16 @@ new class extends Component
         $this->resetPage();
     }
 
+    public function updatingFromDate(): void
+    {
+        $this->resetPage();
+    }
+
+    public function updatingToDate(): void
+    {
+        $this->resetPage();
+    }
+
     /**
      * Every #[Url]-bound filter, appended onto the pagination links —
      * without this, clicking "Next" (a plain <a href>, not a wire:click)
@@ -66,6 +90,8 @@ new class extends Component
             'company' => $this->companyFilter,
             'year' => $this->yearFilter,
             'month' => $this->monthFilter,
+            'from' => $this->fromDate,
+            'to' => $this->toDate,
         ], fn ($value) => $value !== '');
     }
 
@@ -73,6 +99,12 @@ new class extends Component
     {
         $days = new LengthAwarePaginator([], 0, 15, null, ['path' => $this->paginationPath]);
         $availableYears = collect();
+
+        // A To date picked before From would otherwise filter out every
+        // day — swap them instead of silently showing nothing.
+        [$fromDate, $toDate] = ($this->fromDate && $this->toDate && $this->toDate < $this->fromDate)
+            ? [$this->toDate, $this->fromDate]
+            : [$this->fromDate, $this->toDate];
 
         if ($this->companyFilter) {
             $allDays = JobEntry::where('company_id', $this->companyFilter)
@@ -93,6 +125,8 @@ new class extends Component
             $filteredDays = $allDays
                 ->when($this->yearFilter, fn ($days) => $days->filter(fn ($day) => $day['date']->year == $this->yearFilter))
                 ->when($this->monthFilter, fn ($days) => $days->filter(fn ($day) => $day['date']->month == $this->monthFilter))
+                ->when($fromDate, fn ($days) => $days->filter(fn ($day) => $day['date']->toDateString() >= $fromDate))
+                ->when($toDate, fn ($days) => $days->filter(fn ($day) => $day['date']->toDateString() <= $toDate))
                 ->values();
 
             // $days is a computed collection, not a query, so it's paginated
@@ -143,6 +177,15 @@ new class extends Component
                     <option value="{{ $value }}">{{ $label }}</option>
                 @endforeach
             </x-select-input>
+
+            <div class="flex items-center gap-2">
+                <label for="summary_from" class="text-xs font-medium text-slate-500 dark:text-slate-400">From</label>
+                <x-text-input wire:model.live="fromDate" id="summary_from" type="date" class="w-full sm:w-40" />
+            </div>
+            <div class="flex items-center gap-2">
+                <label for="summary_to" class="text-xs font-medium text-slate-500 dark:text-slate-400">To</label>
+                <x-text-input wire:model.live="toDate" id="summary_to" type="date" class="w-full sm:w-40" />
+            </div>
         @endif
     </div>
 

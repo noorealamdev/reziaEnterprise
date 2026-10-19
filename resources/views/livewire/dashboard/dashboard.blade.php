@@ -5,6 +5,7 @@ use App\Models\CompanyAgreement;
 use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\JobEntry;
+use App\Models\ServiceCategory;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Url;
@@ -26,6 +27,17 @@ new class extends Component
 
     #[Url(as: 'p_month', history: true)]
     public string $profitMonthFilter = '';
+
+    public function mount(): void
+    {
+        if ($this->profitYearFilter === '') {
+            $this->profitYearFilter = (string) now()->year;
+        }
+
+        if ($this->profitMonthFilter === '') {
+            $this->profitMonthFilter = (string) now()->month;
+        }
+    }
 
     public function updatingProfitYearFilter(): void
     {
@@ -90,10 +102,12 @@ new class extends Component
                 return max(0, $amount - $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);
             });
 
-        $thisMonthTotal = JobEntry::whereBetween('entry_date', [
-            now()->startOfMonth()->toDateString(),
-            now()->endOfMonth()->toDateString(),
-        ])->sum('bill_amount');
+        // Always literally "this calendar month, paid" — a fixed pulse,
+        // unrelated to the Companies table's own Year/Month filter below.
+        $profitThisMonth = (float) JobEntry::whereHas('invoice', fn ($query) => $query->where('status', 'paid'))
+            ->whereYear('entry_date', now()->year)
+            ->whereMonth('entry_date', now()->month)
+            ->sum('profit_amount');
 
         // Tiffin is billed as one package per department/day, not per
         // ingredient — so entries for the same company/department today are
@@ -103,17 +117,21 @@ new class extends Component
             ->with(['company', 'serviceCategory', 'tiffinDepartment'])
             ->orderByDesc('id')
             ->get()
-            ->groupBy(fn (JobEntry $entry) => $entry->tiffin_department_id
+            // tiffin_department_id is also reused for Simba Fashion's
+            // per-unit Daily Basic Labour entries — only an actual Tiffin
+            // entry collapses into the department batch row below.
+            ->groupBy(fn (JobEntry $entry) => ($entry->tiffin_department_id && $entry->serviceCategory->name === 'Tiffin')
                 ? "tiffin-{$entry->company_id}-{$entry->tiffin_department_id}"
                 : "single-{$entry->id}")
             ->map(function ($group) {
                 $first = $group->first();
+                $isTiffinBatch = $first->tiffin_department_id && $first->serviceCategory->name === 'Tiffin';
 
                 return (object) [
                     'company' => $first->company,
                     'serviceCategory' => $first->serviceCategory,
-                    'label' => $first->tiffin_department_id ? $first->tiffinDepartment->name : $first->supply_type,
-                    'items' => $first->tiffin_department_id ? $group->pluck('supply_type')->unique()->sort()->implode(', ') : null,
+                    'label' => $isTiffinBatch ? $first->tiffinDepartment->name : $first->supply_type,
+                    'items' => $isTiffinBatch ? $group->pluck('supply_type')->unique()->sort()->implode(', ') : null,
                     'billAmount' => (float) $group->sum('bill_amount'),
                     'sortId' => $first->id,
                 ];
@@ -128,15 +146,14 @@ new class extends Component
             'unbilledCount' => $unbilled->count(),
             'billedTotal' => $billedTotal,
             'outstandingTotal' => (float) $outstandingTotal,
-            'thisMonthTotal' => (float) $thisMonthTotal,
+            'profitThisMonth' => $profitThisMonth,
             'readyToInvoice' => $readyToInvoice,
             'todayEntries' => $todayEntries,
             'monthlyTrend' => $this->monthlyTrend(),
-            'companyBreakdown' => $this->companyBreakdown(),
             'dailyExpenseTrend' => $this->dailyExpenseTrend(),
             'invoiceOverview' => $this->invoiceOverview(),
             'agreementDeadlines' => $this->agreementDeadlines(),
-            ...$this->profit(),
+            ...$this->companiesFinancials(),
         ];
     }
 
@@ -294,73 +311,30 @@ new class extends Component
     }
 
     /**
-     * Billed vs unbilled totals per company, all-time, so the client can see
-     * at a glance which companies still have unbilled work sitting on them.
+     * The one comprehensive table of every factory's financial scenario —
+     * what it still owes to be billed (all-time, never filtered — this is
+     * "right now" state, not a historical figure), and what it billed/cost/
+     * profited within the chosen Year/Month/Company scope (defaults to the
+     * current month, set in mount()). Broken down by company when every
+     * company is in view, or by category once a single company is selected
+     * (a company breakdown would just be one row at that point).
      *
-     * @return array{rows: Collection<int, array{company: Company, billed: float, unbilled: float, total: float, billedPct: float, unbilledPct: float}>, truncatedCount: int}
+     * Two profit figures, side by side, same convention the removed Cost &
+     * Profit Report page used:
+     *   - "All Work" — billed minus cost for every entry in scope, whether
+     *     or not the client has paid yet. The honest economic picture.
+     *   - "Paid Only" — only entries whose invoice is actually marked Paid.
+     *     Cash in hand, not just work done.
+     *
+     * @return array{companies: Collection<int, Company>, selectedCompany: ?Company, availableYears: Collection<int, int>, monthOptions: Collection<int, string>, totalBilled: float, totalCost: float, totalProfitAllWork: float, marginAllWork: float, totalProfitPaid: float, marginPaid: float, rows: Collection<int, array<string, mixed>>, byCompany: bool}
      */
-    private function companyBreakdown(): array
-    {
-        // A manually-entered past bill has no job entries to be picked up
-        // by the withSum below — added on per company here instead. Never
-        // folded into unbilledTotal: a manual invoice is never "unbilled"
-        // by definition.
-        $manualBilledByCompany = Invoice::query()
-            ->whereNotNull('manual_amount')
-            ->selectRaw('company_id, SUM(manual_amount) as total')
-            ->groupBy('company_id')
-            ->pluck('total', 'company_id');
-
-        $eligible = Company::query()
-            ->withSum(['jobEntries as billedTotal' => fn ($query) => $query->whereNotNull('invoice_id')], 'bill_amount')
-            ->withSum(['jobEntries as unbilledTotal' => fn ($query) => $query->whereNull('invoice_id')], 'bill_amount')
-            ->get()
-            ->map(fn (Company $company) => [
-                'company' => $company,
-                'billed' => (float) $company->billedTotal + (float) ($manualBilledByCompany[$company->id] ?? 0),
-                'unbilled' => (float) $company->unbilledTotal,
-                'total' => (float) $company->billedTotal + (float) ($manualBilledByCompany[$company->id] ?? 0) + (float) $company->unbilledTotal,
-            ])
-            ->filter(fn ($row) => $row['total'] > 0)
-            ->sortByDesc('total')
-            ->values();
-
-        $max = max(1.0, (float) $eligible->max('total'));
-
-        $rows = $eligible->take(self::BREAKDOWN_LIMIT)->map(fn ($row) => [
-            ...$row,
-            'billedPct' => $this->barPercent($row['billed'], $max),
-            'unbilledPct' => $this->barPercent($row['unbilled'], $max),
-        ])->values();
-
-        return [
-            'rows' => $rows,
-            'truncatedCount' => max(0, $eligible->count() - self::BREAKDOWN_LIMIT),
-        ];
-    }
-
-    /**
-     * Profit summary for the client's chosen Company/Year/Month scope —
-     * defaults to every entry ever recorded so "entire profit" is the
-     * first thing shown, narrowed only once a filter is picked. Broken
-     * down by company when every company is in view, or by category once
-     * a single company is selected (a company breakdown would just be one
-     * row at that point).
-     *
-     * Profit is only ever realized once the client has actually paid — an
-     * entry that's unbilled, or billed but still Due/Partially Paid, has
-     * no money in hand yet, so it contributes to Total Billed/Total Cost
-     * (work done and cost incurred) but never to Total Profit or Margin
-     * until its invoice reaches Paid.
-     *
-     * @return array{profitCompanies: Collection<int, Company>, profitSelectedCompany: ?Company, profitAvailableYears: Collection<int, int>, profitMonthOptions: Collection<int, string>, profitTotalBilled: float, profitTotalCost: float, profitTotal: float, profitMargin: float, profitBreakdown: array{rows: Collection<int, array<string, mixed>>, truncatedCount: int, byCompany: bool}}
-     */
-    private function profit(): array
+    private function companiesFinancials(): array
     {
         $companies = Company::orderBy('name')->get();
         $selectedCompany = $this->profitCompanyFilter
             ? $companies->firstWhere('id', (int) $this->profitCompanyFilter)
             : null;
+        $categories = $selectedCompany ? ServiceCategory::orderBy('sort_order')->get() : collect();
 
         $companyScoped = JobEntry::query()
             ->when($this->profitCompanyFilter, fn ($query) => $query->where('company_id', $this->profitCompanyFilter));
@@ -368,8 +342,6 @@ new class extends Component
         // Offered years always reflect the whole history for this company
         // scope, not just what the current year/month filter leaves behind
         // — same convention as Bill Statement/Daily Summary's dropdowns.
-        // select()->distinct() lets the database collapse the (many) repeat
-        // dates before they ever reach PHP, instead of pulling every row.
         $availableYears = (clone $companyScoped)->select('entry_date')->distinct()->pluck('entry_date')
             ->map(fn ($date) => $date->year)->unique()->sortDesc()->values();
 
@@ -380,62 +352,106 @@ new class extends Component
             ->when($this->profitYearFilter, fn ($query) => $query->whereYear('entry_date', $this->profitYearFilter))
             ->when($this->profitMonthFilter, fn ($query) => $query->whereMonth('entry_date', $this->profitMonthFilter));
 
-        $totals = (clone $entries)->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount) as cost')->first();
+        // cost_amount + shipment_tiffin_cost (Loading Unloading only —
+        // feeding labourers on the shipment, never billed to the factory) —
+        // a real cost incurred, so it belongs in "Cost incurred" too.
+        $totals = (clone $entries)->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount + COALESCE(shipment_tiffin_cost, 0)) as cost')->first();
         $totalBilled = (float) ($totals->billed ?? 0);
         $totalCost = (float) ($totals->cost ?? 0);
+        $totalProfitAllWork = $totalBilled - $totalCost;
 
         $paidEntries = (clone $entries)->whereHas('invoice', fn ($query) => $query->where('status', 'paid'));
 
         $paidTotals = (clone $paidEntries)->selectRaw('SUM(profit_amount) as profit, SUM(bill_amount) as billed')->first();
-        $totalPaidProfit = (float) ($paidTotals->profit ?? 0);
+        $totalProfitPaid = (float) ($paidTotals->profit ?? 0);
         $totalPaidBilled = (float) ($paidTotals->billed ?? 0);
 
         $groupBy = $selectedCompany ? 'service_category_id' : 'company_id';
+        $relation = $selectedCompany ? 'serviceCategory' : 'company';
 
-        // Aggregated by the database (GROUP BY), not by loading every paid
-        // entry as a hydrated model (with 3 eager-loaded relations) and
-        // reducing in PHP — the old version scanned and hydrated the whole
-        // job_entries table on every dashboard render, unfiltered by
-        // default, which is fine at a handful of rows and ruinous once
-        // real usage builds up a real history.
-        $breakdownEligible = (clone $paidEntries)
+        // Unbilled is always all-time, independent of the Year/Month filter
+        // above — "what still needs billing right now" isn't a historical
+        // figure, same convention as the Unbilled stat card and Ready to
+        // Invoice further up this page.
+        $unbilledByGroup = (clone $companyScoped)
+            ->whereNull('invoice_id')
             ->select($groupBy)
-            ->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount) as cost, SUM(profit_amount) as profit')
+            ->selectRaw('SUM(bill_amount) as total')
             ->groupBy($groupBy)
-            ->with($selectedCompany ? 'serviceCategory' : 'company')
+            ->pluck('total', $groupBy);
+
+        // Aggregated by the database (GROUP BY), not by loading every entry
+        // as a hydrated model and reducing in PHP — this scans the whole
+        // job_entries table otherwise, fine at a handful of rows and
+        // ruinous once real usage builds up a real history.
+        $allWorkByGroup = (clone $entries)
+            ->select($groupBy)
+            ->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount + COALESCE(shipment_tiffin_cost, 0)) as cost')
+            ->groupBy($groupBy)
+            ->with($relation)
             ->get()
-            ->map(fn ($row) => [
-                'label' => $selectedCompany ? $row->serviceCategory->name : $row->company->name,
-                'company' => $selectedCompany ? null : $row->company,
-                'billed' => (float) $row->billed,
-                'cost' => (float) $row->cost,
-                'profit' => (float) $row->profit,
-            ])
-            ->sortByDesc('profit')
+            ->keyBy($groupBy);
+
+        // cost here must match profit_amount's own definition (which already
+        // subtracts shipment_tiffin_cost) or Billed - Cost would disagree
+        // with the Profit (Paid) figure shown right beside it.
+        $paidByGroup = (clone $paidEntries)
+            ->select($groupBy)
+            ->selectRaw('SUM(bill_amount) as billed, SUM(profit_amount) as profit')
+            ->groupBy($groupBy)
+            ->get()
+            ->keyBy($groupBy);
+
+        // Every company/category with EITHER unbilled work OR any billed
+        // activity in scope gets a row — nothing going on at all stays
+        // hidden, and (Cost & Profit Report was removed) this is now the
+        // one place a factory's whole scenario lives, so no row is ever
+        // truncated or silently missing.
+        $rows = $allWorkByGroup->keys()->merge($unbilledByGroup->keys())->unique()
+            ->map(function ($id) use ($allWorkByGroup, $paidByGroup, $unbilledByGroup, $selectedCompany, $companies, $categories) {
+                $workRow = $allWorkByGroup->get($id);
+                $paidRow = $paidByGroup->get($id);
+
+                $company = $selectedCompany ? null : ($workRow?->company ?? $companies->firstWhere('id', $id));
+                $label = $selectedCompany
+                    ? ($workRow?->serviceCategory?->name ?? $categories->firstWhere('id', $id)?->name ?? 'Unknown')
+                    : ($company?->name ?? 'Unknown');
+
+                $billed = (float) ($workRow?->billed ?? 0);
+                $cost = (float) ($workRow?->cost ?? 0);
+                $profitAllWork = $billed - $cost;
+                $paidBilled = (float) ($paidRow?->billed ?? 0);
+                $profitPaid = (float) ($paidRow?->profit ?? 0);
+
+                return [
+                    'id' => $id,
+                    'label' => $label,
+                    'company' => $company,
+                    'unbilled' => (float) ($unbilledByGroup[$id] ?? 0),
+                    'billed' => $billed,
+                    'cost' => $cost,
+                    'profitAllWork' => $profitAllWork,
+                    'marginAllWork' => $billed > 0 ? round($profitAllWork / $billed * 100, 1) : 0.0,
+                    'profitPaid' => $profitPaid,
+                    'marginPaid' => $paidBilled > 0 ? round($profitPaid / $paidBilled * 100, 1) : 0.0,
+                ];
+            })
+            ->sortByDesc('profitAllWork')
             ->values();
 
-        $maxProfit = max(1.0, (float) $breakdownEligible->max(fn ($row) => max(0, $row['profit'])));
-
-        $breakdownRows = $breakdownEligible->take(self::BREAKDOWN_LIMIT)->map(fn ($row) => [
-            ...$row,
-            'margin' => $row['billed'] > 0 ? round($row['profit'] / $row['billed'] * 100, 1) : 0.0,
-            'profitPct' => $this->barPercent($row['profit'], $maxProfit),
-        ])->values();
-
         return [
-            'profitCompanies' => $companies,
-            'profitSelectedCompany' => $selectedCompany,
-            'profitAvailableYears' => $availableYears,
-            'profitMonthOptions' => collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]),
-            'profitTotalBilled' => $totalBilled,
-            'profitTotalCost' => $totalCost,
-            'profitTotal' => $totalPaidProfit,
-            'profitMargin' => $totalPaidBilled > 0 ? round($totalPaidProfit / $totalPaidBilled * 100, 1) : 0.0,
-            'profitBreakdown' => [
-                'rows' => $breakdownRows,
-                'truncatedCount' => max(0, $breakdownEligible->count() - self::BREAKDOWN_LIMIT),
-                'byCompany' => ! $selectedCompany,
-            ],
+            'companies' => $companies,
+            'selectedCompany' => $selectedCompany,
+            'availableYears' => $availableYears,
+            'monthOptions' => collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]),
+            'totalBilled' => $totalBilled,
+            'totalCost' => $totalCost,
+            'totalProfitAllWork' => $totalProfitAllWork,
+            'marginAllWork' => $totalBilled > 0 ? round($totalProfitAllWork / $totalBilled * 100, 1) : 0.0,
+            'totalProfitPaid' => $totalProfitPaid,
+            'marginPaid' => $totalPaidBilled > 0 ? round($totalProfitPaid / $totalPaidBilled * 100, 1) : 0.0,
+            'rows' => $rows,
+            'byCompany' => ! $selectedCompany,
         ];
     }
 
@@ -457,7 +473,12 @@ new class extends Component
 <div class="space-y-6">
     @can('dashboard.view')
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <x-stat-card label="Unbilled" :value="number_format($unbilledTotal, 2)" :hint="$unbilledCount.' '.Str::plural('entry', $unbilledCount).' not yet invoiced'">
+        <x-stat-card
+            label="Unbilled"
+            :value="number_format($unbilledTotal, 2)"
+            :hint="$unbilledCount.' '.Str::plural('entry', $unbilledCount).' not yet invoiced'"
+            :href="Gate::allows('bill_statement.view') ? route('bill-statement.index', ['status' => 'unbilled']) : null"
+        >
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="5" y="4" width="14" height="17" rx="2" />
@@ -467,7 +488,12 @@ new class extends Component
             </x-slot:icon>
         </x-stat-card>
 
-        <x-stat-card label="Billed" :value="number_format($billedTotal, 2)" hint="Already invoiced, all-time">
+        <x-stat-card
+            label="Billed"
+            :value="number_format($billedTotal, 2)"
+            hint="Already invoiced, all-time"
+            :href="Gate::allows('bill_statement.view') ? route('bill-statement.index', ['status' => 'billed']) : null"
+        >
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="9" />
@@ -476,7 +502,12 @@ new class extends Component
             </x-slot:icon>
         </x-stat-card>
 
-        <x-stat-card label="Outstanding (Due)" :value="number_format($outstandingTotal, 2)" hint="Billed, awaiting payment">
+        <x-stat-card
+            label="Outstanding (Due)"
+            :value="number_format($outstandingTotal, 2)"
+            hint="Billed, awaiting payment"
+            :href="Gate::allows('bill_statement.view') ? route('bill-statement.index', ['status' => 'unpaid']) : null"
+        >
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M6 3h12v18l-2.5-1.5L13 21l-2.5-1.5L8 21l-2-1.5V3z" />
@@ -485,7 +516,12 @@ new class extends Component
             </x-slot:icon>
         </x-stat-card>
 
-        <x-stat-card label="This Month" :value="number_format($thisMonthTotal, 2)" hint="All activity — billed + unbilled">
+        <x-stat-card
+            label="Profit This Month"
+            :value="number_format($profitThisMonth, 2)"
+            hint="Only counts what's actually been paid so far"
+            :href="Gate::allows('dashboard.view_profit') ? '#companies-cost-profit' : null"
+        >
             <x-slot:icon>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M11 3H5a2 2 0 0 0-2 2v6l10 10 8-8L11 3z" />
@@ -495,9 +531,53 @@ new class extends Component
         </x-stat-card>
     </div>
 
+    <div>
+        <h2 class="px-1 text-base font-semibold text-slate-900 dark:text-white">Pending Bills</h2>
+        <p class="mb-3 px-1 text-xs text-slate-400 dark:text-slate-500">Everything still waiting on an invoice, or waiting to be paid.</p>
+    </div>
+
+    <div>
+        <h3 class="mb-2 px-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Ready to Invoice</h3>
+        <p class="mb-2 px-1 text-xs text-slate-400 dark:text-slate-500">Work that's been done but hasn't been turned into an invoice yet.</p>
+
+        @if ($readyToInvoice->isEmpty())
+            <div class="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-800 dark:text-slate-400">
+                You're all caught up — every entry has been invoiced.
+            </div>
+        @else
+            <div class="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white dark:divide-slate-700/50 dark:border-slate-800 dark:bg-slate-800">
+                @foreach ($readyToInvoice as $group)
+                    <div class="flex flex-wrap items-center justify-between gap-3 p-4">
+                        <div class="min-w-0">
+                            <a href="{{ route('companies.show', $group['company']) }}" wire:navigate class="text-sm font-semibold text-slate-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-400">
+                                {{ $group['company']->name }}
+                            </a>
+                            <x-badge color="brand" class="ml-1">{{ $group['category']->name }}</x-badge>
+                            @if ($group['isOverdue'])
+                                <x-badge color="red" class="ml-1">Since {{ $group['oldestEntryDate']->format('M Y') }}</x-badge>
+                            @endif
+                            <p class="text-xs text-slate-400 dark:text-slate-500">{{ $group['count'] }} {{ Str::plural('entry', $group['count']) }} unbilled</p>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="text-sm font-semibold text-slate-800 dark:text-slate-200">{{ number_format($group['total'], 2) }}</span>
+                            @can('invoices.create')
+                                <x-secondary-button :href="route('invoices.create', ['company' => $group['company']->id, 'category' => $group['category']->id])" wire:navigate class="!text-xs">
+                                    Generate Invoice
+                                </x-secondary-button>
+                            @endcan
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+        @endif
+    </div>
+
     <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Invoice Overview</h3>
+            <div>
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Invoice Overview</h3>
+                <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">Invoices already sent to the factory, broken down by whether they've paid.</p>
+            </div>
             @can('bill_statement.view')
                 <span class="text-xs text-slate-400 dark:text-slate-500">Click a card to view those bills</span>
             @endcan
@@ -535,155 +615,36 @@ new class extends Component
         </div>
     </div>
 
-    @can('company_agreements.view')
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Agreement Deadlines</h3>
-                <a href="{{ route('company-agreements.index') }}" wire:navigate class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                    View all &rarr;
-                </a>
-            </div>
-
-            @if ($agreementDeadlines->isEmpty())
-                <p class="py-6 text-center text-sm text-slate-400 dark:text-slate-500">No agreements are expiring soon.</p>
-            @else
-                <div class="divide-y divide-slate-100 dark:divide-slate-700/50">
-                    @foreach ($agreementDeadlines as $row)
-                        <div class="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                            <div class="min-w-0">
-                                <a href="{{ route('companies.show', $row['agreement']->company) }}" wire:navigate class="text-sm font-medium text-slate-800 hover:text-brand-600 dark:text-slate-200 dark:hover:text-brand-400">
-                                    {{ $row['agreement']->company->name }}
-                                </a>
-                                <span class="text-sm text-slate-500 dark:text-slate-400">— {{ $row['agreement']->title }}</span>
-                                <p class="text-xs text-slate-400 dark:text-slate-500">Ends {{ $row['agreement']->end_date->format('d M Y') }}</p>
-                            </div>
-                            @if ($row['isExpired'])
-                                <x-badge color="red">Expired {{ $row['daysRemaining'] }} {{ Str::plural('day', $row['daysRemaining']) }} ago</x-badge>
-                            @else
-                                <x-badge color="amber">{{ $row['daysRemaining'] }} {{ Str::plural('day', $row['daysRemaining']) }} left</x-badge>
-                            @endif
-                        </div>
-                    @endforeach
-                </div>
-            @endif
-        </div>
-    @endcan
-
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Billed vs Unbilled — Last {{ $monthlyTrend->count() }} Months</h3>
-                <div class="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                    <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-brand-500"></span>Billed</span>
-                    <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-amber-400"></span>Unbilled</span>
-                </div>
-            </div>
-
-            <div class="flex h-48 items-end justify-between gap-2 sm:gap-3">
-                @foreach ($monthlyTrend as $month)
-                    <div class="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                        <div
-                            class="flex w-full max-w-10 flex-1 flex-col-reverse overflow-hidden rounded-md bg-slate-100 dark:bg-slate-700/40"
-                            title="{{ $month['label'] }} — Billed {{ number_format($month['billed'], 2) }} · Unbilled {{ number_format($month['unbilled'], 2) }}"
-                        >
-                            <div class="w-full bg-brand-500" style="height: {{ $month['billedPct'] }}%"></div>
-                            <div class="w-full bg-amber-400" style="height: {{ $month['unbilledPct'] }}%"></div>
-                        </div>
-                        <span class="text-center text-[10px] leading-tight text-slate-500 dark:text-slate-400">{{ $month['label'] }}</span>
-                    </div>
-                @endforeach
-            </div>
-        </div>
-
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">By Company — Billed vs Unbilled</h3>
-                <div class="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                    <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-brand-500"></span>Billed</span>
-                    <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-amber-400"></span>Unbilled</span>
-                </div>
-            </div>
-
-            @if ($companyBreakdown['rows']->isEmpty())
-                <p class="py-8 text-center text-sm text-slate-400 dark:text-slate-500">No billing activity yet.</p>
-            @else
-                <div class="space-y-4">
-                    @foreach ($companyBreakdown['rows'] as $row)
-                        <div>
-                            <div class="mb-1 flex items-center justify-between gap-2 text-xs">
-                                <a href="{{ route('companies.show', $row['company']) }}" wire:navigate class="truncate font-medium text-slate-700 hover:text-brand-600 dark:text-slate-300 dark:hover:text-brand-400">
-                                    {{ $row['company']->name }}
-                                </a>
-                                <span class="shrink-0 text-slate-400 dark:text-slate-500">{{ number_format($row['total'], 2) }}</span>
-                            </div>
-                            <div
-                                class="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700/40"
-                                title="Billed {{ number_format($row['billed'], 2) }} · Unbilled {{ number_format($row['unbilled'], 2) }}"
-                            >
-                                <div class="h-full shrink-0 bg-brand-500" style="width: {{ $row['billedPct'] }}%"></div>
-                                <div class="h-full shrink-0 bg-amber-400" style="width: {{ $row['unbilledPct'] }}%"></div>
-                            </div>
-                        </div>
-                    @endforeach
-                </div>
-
-                @if ($companyBreakdown['truncatedCount'] > 0)
-                    <p class="mt-4 text-center text-xs text-slate-400 dark:text-slate-500">+{{ $companyBreakdown['truncatedCount'] }} more {{ Str::plural('company', $companyBreakdown['truncatedCount']) }} not shown</p>
-                @endif
-            @endif
-        </div>
-    </div>
-
-    @can('expenses.view')
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Expenses — Last {{ $dailyExpenseTrend->count() }} Days</h3>
-                <span class="text-xs text-slate-500 dark:text-slate-400">Total: {{ number_format($dailyExpenseTrend->sum('total'), 2) }}</span>
-            </div>
-
-            @if ($dailyExpenseTrend->sum('total') <= 0)
-                <p class="py-8 text-center text-sm text-slate-400 dark:text-slate-500">No expenses recorded in this window.</p>
-            @else
-                <div class="flex h-40 items-end justify-between gap-1 sm:gap-2">
-                    @foreach ($dailyExpenseTrend as $day)
-                        <div class="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                            <div
-                                class="flex w-full max-w-8 flex-1 flex-col-reverse overflow-hidden rounded-md bg-slate-100 dark:bg-slate-700/40"
-                                title="{{ $day['label'] }} — {{ number_format($day['total'], 2) }}"
-                            >
-                                <div class="w-full bg-brand-500" style="height: {{ $day['pct'] }}%"></div>
-                            </div>
-                            <span class="text-center text-[10px] leading-tight text-slate-500 dark:text-slate-400">{{ $day['label'] }}</span>
-                        </div>
-                    @endforeach
-                </div>
-            @endif
-        </div>
-    @endcan
-
     @can('dashboard.view_profit')
-    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+    <div id="companies-cost-profit" class="scroll-mt-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
         <div class="flex flex-wrap items-center justify-between gap-3">
-            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Profit</h3>
+            <div>
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Companies — Cost &amp; Profit</h3>
+                <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                    What every factory has billed, what it cost to deliver, and what's actually been earned.
+                    <span class="font-medium text-emerald-600 dark:text-emerald-400">Green</span> is a profit,
+                    <span class="font-medium text-red-600 dark:text-red-400">red</span> is a loss.
+                </p>
+            </div>
 
             <div class="flex flex-wrap items-center gap-3">
                 <x-select-input wire:model.live="profitCompanyFilter" class="w-full sm:w-56">
                     <option value="">All companies</option>
-                    @foreach ($profitCompanies as $company)
+                    @foreach ($companies as $company)
                         <option value="{{ $company->id }}">{{ $company->name }}</option>
                     @endforeach
                 </x-select-input>
 
                 <x-select-input wire:model.live="profitYearFilter" class="w-full sm:w-32">
                     <option value="">Every year</option>
-                    @foreach ($profitAvailableYears as $year)
+                    @foreach ($availableYears as $year)
                         <option value="{{ $year }}">{{ $year }}</option>
                     @endforeach
                 </x-select-input>
 
                 <x-select-input wire:model.live="profitMonthFilter" class="w-full sm:w-40" :disabled="! $profitYearFilter">
                     <option value="">{{ $profitYearFilter ? 'Every month' : 'Pick a year first' }}</option>
-                    @foreach ($profitMonthOptions as $value => $label)
+                    @foreach ($monthOptions as $value => $label)
                         <option value="{{ $value }}">{{ $label }}</option>
                     @endforeach
                 </x-select-input>
@@ -693,97 +654,84 @@ new class extends Component
         <div class="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
             <div>
                 <p class="text-xs text-slate-500 dark:text-slate-400" title="Work billed regardless of payment status.">Total Billed</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($profitTotalBilled, 2) }}</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($totalBilled, 2) }}</p>
             </div>
             <div>
                 <p class="text-xs text-slate-500 dark:text-slate-400" title="Cost incurred regardless of payment status.">Total Cost</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($profitTotalCost, 2) }}</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($totalCost, 2) }}</p>
             </div>
             <div>
-                <p class="text-xs text-slate-500 dark:text-slate-400" title="Only counts invoices marked Paid — Due and Partially Paid bills aren't profit yet.">Total Profit (Paid only)</p>
-                <p class="mt-1 text-lg font-semibold {{ $profitTotal >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">{{ number_format($profitTotal, 2) }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400" title="Billed minus cost, for every entry — whether or not the client has paid yet. The honest, full picture.">Profit — All Work</p>
+                <p class="mt-1 text-lg font-semibold {{ $totalProfitAllWork >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">
+                    {{ number_format($totalProfitAllWork, 2) }}
+                    <span class="text-sm font-normal">({{ number_format($marginAllWork, 1) }}%)</span>
+                </p>
             </div>
             <div>
-                <p class="text-xs text-slate-500 dark:text-slate-400" title="Only counts invoices marked Paid — Due and Partially Paid bills aren't profit yet.">Margin (Paid only)</p>
-                <p class="mt-1 text-lg font-semibold {{ $profitMargin >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">{{ number_format($profitMargin, 1) }}%</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400" title="Only counts invoices actually marked Paid — Due and Partially Paid bills aren't profit yet. Cash in hand.">Profit — Paid Only</p>
+                <p class="mt-1 text-lg font-semibold {{ $totalProfitPaid >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">
+                    {{ number_format($totalProfitPaid, 2) }}
+                    <span class="text-sm font-normal">({{ number_format($marginPaid, 1) }}%)</span>
+                </p>
             </div>
         </div>
 
         <div class="mt-5 border-t border-slate-100 pt-4 dark:border-slate-700/50">
             <h4 class="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                {{ $profitBreakdown['byCompany'] ? 'By Company' : 'By Category' }} — Paid Only
+                {{ $byCompany ? 'Every Company' : $selectedCompany->name.' — By Category' }}
             </h4>
 
-            @if ($profitBreakdown['rows']->isEmpty())
-                <p class="py-4 text-center text-sm text-slate-400 dark:text-slate-500">No paid invoices in this scope yet.</p>
+            @if ($rows->isEmpty())
+                <p class="py-4 text-center text-sm text-slate-400 dark:text-slate-500">No billing activity in this scope yet.</p>
             @else
-                <div class="space-y-4">
-                    @foreach ($profitBreakdown['rows'] as $row)
-                        <div>
-                            <div class="mb-1 flex items-center justify-between gap-2 text-xs">
-                                @if ($profitBreakdown['byCompany'])
-                                    <a href="{{ route('companies.show', $row['company']) }}" wire:navigate class="truncate font-medium text-slate-700 hover:text-brand-600 dark:text-slate-300 dark:hover:text-brand-400">
-                                        {{ $row['label'] }}
-                                    </a>
-                                @else
-                                    <span class="truncate font-medium text-slate-700 dark:text-slate-300">{{ $row['label'] }}</span>
-                                @endif
-                                <span class="shrink-0 {{ $row['profit'] >= 0 ? 'text-slate-500 dark:text-slate-400' : 'text-red-500 dark:text-red-400' }}">
-                                    {{ number_format($row['profit'], 2) }} ({{ number_format($row['margin'], 1) }}%)
-                                </span>
-                            </div>
-                            <div
-                                class="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700/40"
-                                title="Billed {{ number_format($row['billed'], 2) }} · Cost {{ number_format($row['cost'], 2) }} · Profit {{ number_format($row['profit'], 2) }}"
-                            >
-                                <div class="h-full {{ $row['profit'] >= 0 ? 'bg-emerald-500' : 'bg-red-400' }}" style="width: {{ $row['profitPct'] }}%"></div>
-                            </div>
-                        </div>
-                    @endforeach
+                {{-- Every row shows, never truncated — scrolls once the list
+                outgrows the panel instead of capping at a fixed count. --}}
+                <div class="max-h-[36rem] overflow-auto">
+                    <table class="w-full min-w-[720px] text-sm">
+                        <thead class="sticky top-0 bg-white dark:bg-slate-800">
+                            <tr class="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                                <th class="px-3 py-2">{{ $byCompany ? 'Company' : 'Category' }}</th>
+                                <th class="px-3 py-2 text-right">Unbilled</th>
+                                <th class="px-3 py-2 text-right">Billed</th>
+                                <th class="px-3 py-2 text-right">Cost</th>
+                                <th class="px-3 py-2 text-right">Profit — All Work</th>
+                                <th class="px-3 py-2 text-right">Profit — Paid Only</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($rows as $row)
+                                <tr class="border-b border-slate-100 last:border-0 dark:border-slate-700/50">
+                                    <td class="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">
+                                        @if ($byCompany)
+                                            <a href="{{ route('companies.show', $row['company']) }}" wire:navigate class="hover:text-brand-600 dark:hover:text-brand-400">
+                                                {{ $row['label'] }}
+                                            </a>
+                                        @else
+                                            {{ $row['label'] }}
+                                        @endif
+                                    </td>
+                                    <td class="px-3 py-2 text-right {{ $row['unbilled'] > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-400 dark:text-slate-500' }}">
+                                        {{ $row['unbilled'] > 0 ? number_format($row['unbilled'], 2) : '—' }}
+                                    </td>
+                                    <td class="px-3 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format($row['billed'], 2) }}</td>
+                                    <td class="px-3 py-2 text-right text-slate-600 dark:text-slate-400">{{ number_format($row['cost'], 2) }}</td>
+                                    <td class="px-3 py-2 text-right font-medium {{ $row['profitAllWork'] >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">
+                                        {{ number_format($row['profitAllWork'], 2) }}
+                                        <span class="font-normal text-xs">({{ number_format($row['marginAllWork'], 1) }}%)</span>
+                                    </td>
+                                    <td class="px-3 py-2 text-right font-medium {{ $row['profitPaid'] >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">
+                                        {{ number_format($row['profitPaid'], 2) }}
+                                        <span class="font-normal text-xs">({{ number_format($row['marginPaid'], 1) }}%)</span>
+                                    </td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
                 </div>
-
-                @if ($profitBreakdown['truncatedCount'] > 0)
-                    <p class="mt-4 text-center text-xs text-slate-400 dark:text-slate-500">+{{ $profitBreakdown['truncatedCount'] }} more {{ $profitBreakdown['byCompany'] ? Str::plural('company', $profitBreakdown['truncatedCount']) : Str::plural('category', $profitBreakdown['truncatedCount']) }} not shown</p>
-                @endif
             @endif
         </div>
     </div>
     @endcan
-
-    <div>
-        <h3 class="mb-2 px-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Ready to Invoice</h3>
-
-        @if ($readyToInvoice->isEmpty())
-            <div class="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-800 dark:text-slate-400">
-                You're all caught up — every entry has been invoiced.
-            </div>
-        @else
-            <div class="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white dark:divide-slate-700/50 dark:border-slate-800 dark:bg-slate-800">
-                @foreach ($readyToInvoice as $group)
-                    <div class="flex flex-wrap items-center justify-between gap-3 p-4">
-                        <div class="min-w-0">
-                            <a href="{{ route('companies.show', $group['company']) }}" wire:navigate class="text-sm font-semibold text-slate-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-400">
-                                {{ $group['company']->name }}
-                            </a>
-                            <x-badge color="brand" class="ml-1">{{ $group['category']->name }}</x-badge>
-                            @if ($group['isOverdue'])
-                                <x-badge color="red" class="ml-1">Since {{ $group['oldestEntryDate']->format('M Y') }}</x-badge>
-                            @endif
-                            <p class="text-xs text-slate-400 dark:text-slate-500">{{ $group['count'] }} {{ Str::plural('entry', $group['count']) }} unbilled</p>
-                        </div>
-                        <div class="flex items-center gap-4">
-                            <span class="text-sm font-semibold text-slate-800 dark:text-slate-200">{{ number_format($group['total'], 2) }}</span>
-                            @can('invoices.create')
-                                <x-secondary-button :href="route('invoices.create', ['company' => $group['company']->id, 'category' => $group['category']->id])" wire:navigate class="!text-xs">
-                                    Generate Invoice
-                                </x-secondary-button>
-                            @endcan
-                        </div>
-                    </div>
-                @endforeach
-            </div>
-        @endif
-    </div>
 
     <div>
         <h3 class="mb-2 px-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Today's Activity</h3>
@@ -833,6 +781,94 @@ new class extends Component
             </div>
         @endif
     </div>
+
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Billed vs Unbilled — Last {{ $monthlyTrend->count() }} Months</h3>
+                <div class="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+                    <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-brand-500"></span>Billed</span>
+                    <span class="flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-amber-400"></span>Unbilled</span>
+                </div>
+            </div>
+
+            <div class="flex h-48 items-end justify-between gap-2 sm:gap-3">
+                @foreach ($monthlyTrend as $month)
+                    <div class="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                        <div
+                            class="flex w-full max-w-10 flex-1 flex-col-reverse overflow-hidden rounded-md bg-slate-100 dark:bg-slate-700/40"
+                            title="{{ $month['label'] }} — Billed {{ number_format($month['billed'], 2) }} · Unbilled {{ number_format($month['unbilled'], 2) }}"
+                        >
+                            <div class="w-full bg-brand-500" style="height: {{ $month['billedPct'] }}%"></div>
+                            <div class="w-full bg-amber-400" style="height: {{ $month['unbilledPct'] }}%"></div>
+                        </div>
+                        <span class="text-center text-[10px] leading-tight text-slate-500 dark:text-slate-400">{{ $month['label'] }}</span>
+                    </div>
+                @endforeach
+            </div>
+        </div>
+
+        @can('company_agreements.view')
+            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+                <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Agreement Deadlines</h3>
+                    <a href="{{ route('company-agreements.index') }}" wire:navigate class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                        View all &rarr;
+                    </a>
+                </div>
+
+                @if ($agreementDeadlines->isEmpty())
+                    <p class="py-6 text-center text-sm text-slate-400 dark:text-slate-500">No agreements are expiring soon.</p>
+                @else
+                    <div class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        @foreach ($agreementDeadlines as $row)
+                            <div class="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+                                <div class="min-w-0">
+                                    <a href="{{ route('companies.show', $row['agreement']->company) }}" wire:navigate class="text-sm font-medium text-slate-800 hover:text-brand-600 dark:text-slate-200 dark:hover:text-brand-400">
+                                        {{ $row['agreement']->company->name }}
+                                    </a>
+                                    <span class="text-sm text-slate-500 dark:text-slate-400">— {{ $row['agreement']->title }}</span>
+                                    <p class="text-xs text-slate-400 dark:text-slate-500">Ends {{ $row['agreement']->end_date->format('d M Y') }}</p>
+                                </div>
+                                @if ($row['isExpired'])
+                                    <x-badge color="red">Expired {{ $row['daysRemaining'] }} {{ Str::plural('day', $row['daysRemaining']) }} ago</x-badge>
+                                @else
+                                    <x-badge color="amber">{{ $row['daysRemaining'] }} {{ Str::plural('day', $row['daysRemaining']) }} left</x-badge>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            </div>
+        @endcan
+    </div>
+
+    @can('expenses.view')
+        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Expenses — Last {{ $dailyExpenseTrend->count() }} Days</h3>
+                <span class="text-xs text-slate-500 dark:text-slate-400">Total: {{ number_format($dailyExpenseTrend->sum('total'), 2) }}</span>
+            </div>
+
+            @if ($dailyExpenseTrend->sum('total') <= 0)
+                <p class="py-8 text-center text-sm text-slate-400 dark:text-slate-500">No expenses recorded in this window.</p>
+            @else
+                <div class="flex h-40 items-end justify-between gap-1 sm:gap-2">
+                    @foreach ($dailyExpenseTrend as $day)
+                        <div class="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                            <div
+                                class="flex w-full max-w-8 flex-1 flex-col-reverse overflow-hidden rounded-md bg-slate-100 dark:bg-slate-700/40"
+                                title="{{ $day['label'] }} — {{ number_format($day['total'], 2) }}"
+                            >
+                                <div class="w-full bg-brand-500" style="height: {{ $day['pct'] }}%"></div>
+                            </div>
+                            <span class="text-center text-[10px] leading-tight text-slate-500 dark:text-slate-400">{{ $day['label'] }}</span>
+                        </div>
+                    @endforeach
+                </div>
+            @endif
+        </div>
+    @endcan
     @else
         <x-empty-state
             title="Nothing to show yet"

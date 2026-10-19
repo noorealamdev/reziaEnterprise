@@ -1,6 +1,15 @@
-@props(['label', 'value' => null, 'soon' => false, 'hint' => null])
+@props(['label', 'value' => null, 'soon' => false, 'hint' => null, 'href' => null])
 
-<div {{ $attributes->merge(['class' => 'flex items-start gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800']) }}>
+@php
+    $baseClass = 'flex items-start gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800';
+    $linkClass = $href ? ' transition hover:border-brand-300 hover:shadow-md dark:hover:border-brand-700' : '';
+@endphp
+
+@if ($href)
+    <a {{ $attributes->merge(['class' => $baseClass.$linkClass]) }} href="{{ $href }}" wire:navigate>
+@else
+    <div {{ $attributes->merge(['class' => $baseClass]) }}>
+@endif
     <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-900/40 dark:text-brand-300">
         {{ $icon }}
     </div>
@@ -18,4 +27,8 @@
             <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ $hint }}</p>
         @endif
     </div>
-</div>
+@if ($href)
+    </a>
+@else
+    </div>
+@endif

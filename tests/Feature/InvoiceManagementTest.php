@@ -302,6 +302,100 @@ test('a company with no Tiffin departments configured invoices Tiffin exactly as
     expect($entry->fresh()->invoice_id)->not->toBeNull();
 });
 
+test('generating a Daily Basic Labour invoice for Simba Fashion requires picking a unit, and bills only that unit', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'SFL']);
+    $labour = makeServiceCategory('Daily Basic Labour');
+    $unit1 = TiffinDepartment::create(['name' => 'Simba Unit-01']);
+    $unit2 = TiffinDepartment::create(['name' => 'Simba Unit-02']);
+    $company->tiffinDepartments()->attach([$unit1->id, $unit2->id]);
+
+    $unit1Entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'tiffin_department_id' => $unit1->id,
+        'entry_date' => '2026-08-15',
+        'bill_amount' => 1000,
+    ]);
+    $unit2Entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'tiffin_department_id' => $unit2->id,
+        'entry_date' => '2026-08-16',
+        'bill_amount' => 800,
+    ]);
+
+    $this->actingAs($user);
+
+    // Leaving the unit unset is rejected — Simba Fashion wants its 4 units
+    // billed separately, never combined into one invoice.
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $labour->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/SIMBA/DBL-U1/082026')
+        ->call('generate')
+        ->assertHasErrors(['tiffin_department_id']);
+    expect(Invoice::count())->toBe(0);
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $labour->id)
+        ->set('tiffin_department_id', $unit1->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/SIMBA/DBL-U1/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $unit1Invoice = Invoice::where('invoice_number', 'RE/SIMBA/DBL-U1/082026')->sole();
+    expect($unit1Invoice->jobEntries()->count())->toBe(1);
+    expect($unit1Entry->fresh()->invoice_id)->toBe($unit1Invoice->id);
+    expect($unit2Entry->fresh()->invoice_id)->toBeNull();
+
+    Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $labour->id)
+        ->set('tiffin_department_id', $unit2->id)
+        ->set('period', '2026-08')
+        ->set('invoice_number', 'RE/SIMBA/DBL-U2/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    $unit2Invoice = Invoice::where('invoice_number', 'RE/SIMBA/DBL-U2/082026')->sole();
+    expect($unit2Entry->fresh()->invoice_id)->toBe($unit2Invoice->id);
+    expect(Invoice::count())->toBe(2);
+});
+
+test('Daily Basic Labour for a company other than Simba Fashion has no unit picker, even with departments configured', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'AAL']);
+    $labour = makeServiceCategory('Daily Basic Labour');
+    $department = TiffinDepartment::create(['name' => 'Swing']);
+    $company->tiffinDepartments()->attach($department->id);
+
+    $entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => '2026-08-15',
+        'bill_amount' => 1000,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('invoices.invoice-generate-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $labour->id);
+
+    expect($component->viewData('tiffinDepartments'))->toBeEmpty();
+
+    $component->set('period', '2026-08')
+        ->set('invoice_number', 'RE/AAL/DBL/082026')
+        ->call('generate')
+        ->assertHasNoErrors();
+
+    expect($entry->fresh()->invoice_id)->not->toBeNull();
+});
+
 test('an off-day entry is included in the invoice but contributes zero to the total', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create(['code' => 'AAL']);
@@ -476,6 +570,95 @@ test('adding a past invoice persists it with a manual amount and no job entries'
     expect($invoice->jobEntries)->toHaveCount(0);
 });
 
+test('adding a past invoice with a total cost persists it', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.manual-invoice-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('invoice_number', 'OLD-BILL-COST-001')
+        ->set('bill_date', '2026-01-15')
+        ->set('manual_amount', '50000')
+        ->set('manual_cost_amount', '42000')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $invoice = Invoice::where('invoice_number', 'OLD-BILL-COST-001')->first();
+    expect((float) $invoice->manual_cost_amount)->toBe(42000.0);
+});
+
+test('leaving the total cost blank when adding a past invoice stores no cost', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.manual-invoice-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('invoice_number', 'OLD-BILL-COST-002')
+        ->set('bill_date', '2026-01-15')
+        ->set('manual_amount', '50000')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $invoice = Invoice::where('invoice_number', 'OLD-BILL-COST-002')->first();
+    expect($invoice->manual_cost_amount)->toBeNull();
+});
+
+test('a past invoices detail page shows its profit computed from the recorded total cost', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OLD-BILL-PROFIT',
+        'period_start' => '2026-02-01',
+        'period_end' => '2026-02-01',
+        'status' => 'due',
+        'manual_amount' => 50000,
+        'manual_cost_amount' => 42000,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->assertSee('42,000.00')
+        // Profit: 50,000 - 42,000
+        ->assertSee('8,000.00');
+
+    expect($component->viewData('totalCostAmount'))->toBe(42000.0);
+    expect($component->viewData('totalProfitAmount'))->toBe(8000.0);
+});
+
+test('a past invoice with no recorded total cost still shows zero cost and profit, not a fabricated figure', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'OLD-BILL-NO-COST',
+        'period_start' => '2026-02-01',
+        'period_end' => '2026-02-01',
+        'status' => 'due',
+        'manual_amount' => 50000,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('invoices.invoice-detail', ['invoice' => $invoice]);
+
+    expect($component->viewData('totalCostAmount'))->toBe(0.0);
+    expect($component->viewData('totalProfitAmount'))->toBe(0.0);
+});
+
 test('a past invoices detail page shows a single synthetic row for its manual amount', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -541,6 +724,7 @@ test('a past invoices amount is reflected in bill statement and dashboard totals
     $this->actingAs($user);
 
     $statement = Volt::test('bill-statement.bill-statement')
+        ->set('yearFilter', '')
         ->assertSee('12,000.00');
     expect($statement)->not->toBeNull();
 
@@ -828,6 +1012,69 @@ test('the invoice document shows the amount spelled out in Bangladeshi lakh/cror
 
     Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
         ->assertSee('Three Lakh Eighteen Thousand Five Hundred Fifty Two Taka Only.');
+});
+
+test('a Simba Daily Basic Labour invoice document shows which unit it is for', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'SFL']);
+    $category = makeServiceCategory('Daily Basic Labour');
+    $unit1 = TiffinDepartment::create(['name' => 'Simba Unit-01']);
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'SIMBA-DBL-U1',
+        'period_start' => '2026-08-01',
+        'period_end' => '2026-08-31',
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'tiffin_department_id' => $unit1->id,
+        'invoice_id' => $invoice->id,
+        'entry_date' => '2026-08-15',
+        'bill_amount' => 6500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('invoices.invoice-detail', ['invoice' => $invoice])
+        ->assertSee('Simba Unit-01')
+        ->assertSee('Bill For Daily Basic Labour (Simba Unit-01) Month Of August 2026.', false);
+});
+
+test('an invoices Total Cost folds in shipment tiffin cost, but Total Billed never does', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'LU-SHIPMENT-1',
+        'period_start' => '2026-08-01',
+        'period_end' => '2026-08-31',
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_id' => $invoice->id,
+        'entry_date' => '2026-08-15',
+        'cost_amount' => 12600,
+        'bill_amount' => 15300,
+        'shipment_tiffin_cost' => 500,
+        'profit_amount' => 2200,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('invoices.invoice-detail', ['invoice' => $invoice]);
+
+    // Total Cost is 12,600 + 500 shipment so Total Cost + Total Profit
+    // reconciles to the bill — the shipment cost is never added to Billed.
+    expect($component->viewData('totalCostAmount'))->toBe(13100.0);
+    expect($component->viewData('totalProfitAmount'))->toBe(2200.0);
+    expect($invoice->fresh()->subtotal)->toBe(15300.0);
 });
 
 test('a VAT invoice shows the VAT line and a grand total with it deducted', function () {

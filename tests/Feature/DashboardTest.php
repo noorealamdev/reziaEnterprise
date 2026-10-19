@@ -289,43 +289,6 @@ test('billed vs unbilled trend chart splits this month total by invoice status',
         ->assertSee(now()->format('M Y').' — Billed 6,000.00 · Unbilled 2,500.00', false);
 });
 
-test('by company breakdown shows the largest companies first and truncates the rest', function () {
-    $user = User::factory()->create();
-    $category = makeServiceCategory('Daily Basic Labour');
-
-    foreach (range(1, 9) as $i) {
-        $company = Company::factory()->create(['name' => "Breakdown Co {$i}"]);
-        $invoice = Invoice::create([
-            'company_id' => $company->id,
-            'service_category_id' => $category->id,
-            'invoice_number' => "BRK-{$i}",
-            'period_start' => now()->subMonths(2)->startOfMonth()->toDateString(),
-            'period_end' => now()->subMonths(2)->endOfMonth()->toDateString(),
-            'status' => 'due',
-        ]);
-        JobEntry::factory()->create([
-            'company_id' => $company->id,
-            'service_category_id' => $category->id,
-            'entry_date' => now()->subMonths(2)->toDateString(),
-            'bill_amount' => $i * 1000,
-            'invoice_id' => $invoice->id,
-        ]);
-    }
-
-    $this->actingAs($user);
-
-    $names = Volt::test('dashboard.dashboard')
-        ->viewData('companyBreakdown')['rows']
-        ->pluck('company.name');
-
-    expect($names->all())->toBe(['Breakdown Co 9', 'Breakdown Co 8', 'Breakdown Co 7', 'Breakdown Co 6', 'Breakdown Co 5', 'Breakdown Co 4', 'Breakdown Co 3', 'Breakdown Co 2']);
-    expect($names)->not->toContain('Breakdown Co 1');
-
-    $this->get('/dashboard')
-        ->assertOk()
-        ->assertSee('+1 more company not shown');
-});
-
 test('dashboard shows company totals and empty states with no data', function () {
     $user = User::factory()->create();
 
@@ -339,6 +302,150 @@ test('dashboard shows company totals and empty states with no data', function ()
         ->assertSee('2 active')
         ->assertSee('Nothing logged today yet')
         ->assertSee("You're all caught up", false);
+});
+
+test('the Unbilled, Billed and Outstanding stat cards link straight to those bills', function () {
+    $user = User::factory()->create();
+
+    $this->actingAs($user)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertSee('/bill-statement?status=unbilled', false)
+        ->assertSee('/bill-statement?status=billed', false)
+        ->assertSee('/bill-statement?status=unpaid', false);
+});
+
+test('the Profit This Month stat card links to the Companies table, but only with view_profit permission', function () {
+    $staff = User::factory()->staff()->create();
+    RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::DashboardView->value]);
+
+    $this->actingAs($staff)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertDontSee('#companies-cost-profit', false);
+
+    $admin = User::factory()->create();
+
+    $this->actingAs($admin)
+        ->get('/dashboard')
+        ->assertOk()
+        ->assertSee('#companies-cost-profit', false);
+});
+
+test('Profit This Month only counts paid invoices for the current calendar month, regardless of the Companies table filters', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $paidInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'PULSE-PAID',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->toDateString(),
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 1000,
+        'cost_amount' => 600,
+        'profit_amount' => 400,
+        'invoice_id' => $paidInvoice->id,
+    ]);
+
+    // Due (unpaid) this month — must not count toward the pulse figure.
+    $dueInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'PULSE-DUE',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'due',
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 9999,
+        'cost_amount' => 1,
+        'profit_amount' => 9998,
+        'invoice_id' => $dueInvoice->id,
+    ]);
+
+    // A paid entry from last month — must not count toward "this month".
+    $lastMonthInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'PULSE-OLD',
+        'period_start' => now()->subMonthNoOverflow()->startOfMonth()->toDateString(),
+        'period_end' => now()->subMonthNoOverflow()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->subMonthNoOverflow()->toDateString(),
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->subMonthNoOverflow()->toDateString(),
+        'bill_amount' => 5000,
+        'cost_amount' => 1,
+        'profit_amount' => 4999,
+        'invoice_id' => $lastMonthInvoice->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('dashboard.dashboard')
+        // Even with the Companies table scoped to a totally different
+        // period, the pulse stat stays fixed to the real current month.
+        ->set('profitYearFilter', '2020')
+        ->set('profitMonthFilter', '1');
+
+    expect($component->viewData('profitThisMonth'))->toBe(400.0);
+
+    $this->get('/dashboard')
+        ->assertOk()
+        ->assertSee('Profit This Month')
+        ->assertSee('400.00');
+});
+
+test('the companies table flags a loss in red and a profit in green', function () {
+    $user = User::factory()->create();
+    $losingCompany = Company::factory()->create(['name' => 'Losing Co']);
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $invoice = Invoice::create([
+        'company_id' => $losingCompany->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'LOSS-1',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'due',
+    ]);
+    // Cost exceeds bill — a real loss, all work (nothing paid yet).
+    JobEntry::factory()->create([
+        'company_id' => $losingCompany->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 1000,
+        'cost_amount' => 1500,
+        'invoice_id' => $invoice->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $row = Volt::test('dashboard.dashboard')
+        ->viewData('rows')
+        ->firstWhere('label', 'Losing Co');
+
+    expect($row['profitAllWork'])->toBe(-500.0);
+
+    $this->get('/dashboard')
+        ->assertOk()
+        ->assertSee('Losing Co')
+        ->assertSee('text-red-600', false);
 });
 
 test('profit only counts paid invoices, while billed and cost total every entry regardless of payment', function () {
@@ -406,10 +513,54 @@ test('profit only counts paid invoices, while billed and cost total every entry 
 
     $component = Volt::test('dashboard.dashboard');
 
-    expect($component->viewData('profitTotalBilled'))->toBe(16999.0);
-    expect($component->viewData('profitTotalCost'))->toBe(3501.0);
-    expect($component->viewData('profitTotal'))->toBe(3500.0);
-    expect($component->viewData('profitMargin'))->toBe(50.0);
+    expect($component->viewData('totalBilled'))->toBe(16999.0);
+    expect($component->viewData('totalCost'))->toBe(3501.0);
+    expect($component->viewData('totalProfitPaid'))->toBe(3500.0);
+    expect($component->viewData('marginPaid'))->toBe(50.0);
+});
+
+test('profit totals and the breakdown fold shipment tiffin cost into Cost, matching profit_amount', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $loadingUnloading = makeServiceCategory('Loading Unloading');
+
+    $paidInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $loadingUnloading->id,
+        'invoice_number' => 'PROFIT-SHIPMENT',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->toDateString(),
+    ]);
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $loadingUnloading->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 15300,
+        'cost_amount' => 12600,
+        'shipment_tiffin_cost' => 500,
+        'profit_amount' => 2200,
+        'invoice_id' => $paidInvoice->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('dashboard.dashboard');
+
+    // Cost (12,600 + 500 shipment) must match what profit_amount already
+    // subtracted, or Billed - Cost would disagree with Profit shown right
+    // beside it.
+    expect($component->viewData('totalBilled'))->toBe(15300.0);
+    expect($component->viewData('totalCost'))->toBe(13100.0);
+    expect($component->viewData('totalProfitPaid'))->toBe(2200.0);
+
+    $row = $component->viewData('rows')->first();
+    expect($row['billed'])->toBe(15300.0);
+    expect($row['cost'])->toBe(13100.0);
+    expect($row['profitAllWork'])->toBe(2200.0);
+    expect($row['profitPaid'])->toBe(2200.0);
 });
 
 test('profit filters narrow by year, month and company, and clear the month when the year changes', function () {
@@ -458,8 +609,8 @@ test('profit filters narrow by year, month and company, and clear the month when
         ->set('profitYearFilter', '2026')
         ->set('profitMonthFilter', '8');
 
-    expect($component->viewData('profitTotalBilled'))->toBe(1000.0);
-    expect($component->viewData('profitTotal'))->toBe(600.0);
+    expect($component->viewData('totalBilled'))->toBe(1000.0);
+    expect($component->viewData('totalProfitPaid'))->toBe(600.0);
 
     $component->set('profitYearFilter', '2025');
     expect($component->get('profitMonthFilter'))->toBe('');
@@ -512,10 +663,51 @@ test('profit breakdown switches from companies to categories once a single compa
     $component = Volt::test('dashboard.dashboard')
         ->set('profitCompanyFilter', (string) $company->id);
 
-    $breakdown = $component->viewData('profitBreakdown');
+    expect($component->viewData('byCompany'))->toBeFalse();
+    expect($component->viewData('rows')->pluck('label')->all())->toBe(['Diesel Oil Supply', 'Daily Basic Labour']);
+});
 
-    expect($breakdown['byCompany'])->toBeFalse();
-    expect($breakdown['rows']->pluck('label')->all())->toBe(['Diesel Oil Supply', 'Daily Basic Labour']);
+test('the companies cost and profit table shows every company, never truncated', function () {
+    $user = User::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    // Cost & Profit Report (the dedicated, untruncated page) was removed —
+    // the Dashboard is now the only place a factory's profit lives, so
+    // every one of these 9 companies must show, not just the top 8.
+    foreach (range(1, 9) as $i) {
+        $company = Company::factory()->create(['name' => "Profit Co {$i}"]);
+        $invoice = Invoice::create([
+            'company_id' => $company->id,
+            'service_category_id' => $category->id,
+            'invoice_number' => "PROFIT-BRK-{$i}",
+            'period_start' => now()->startOfMonth()->toDateString(),
+            'period_end' => now()->endOfMonth()->toDateString(),
+            'status' => 'paid',
+            'paid_at' => now()->toDateString(),
+        ]);
+        JobEntry::factory()->create([
+            'company_id' => $company->id,
+            'service_category_id' => $category->id,
+            'entry_date' => now()->toDateString(),
+            'bill_amount' => $i * 1000,
+            'cost_amount' => $i * 100,
+            'invoice_id' => $invoice->id,
+        ]);
+    }
+
+    $this->actingAs($user);
+
+    $names = Volt::test('dashboard.dashboard')
+        ->viewData('rows')
+        ->pluck('label');
+
+    expect($names)->toHaveCount(9);
+    expect($names)->toContain('Profit Co 1');
+
+    $this->get('/dashboard')
+        ->assertOk()
+        ->assertSee('Profit Co 1')
+        ->assertSee('Profit Co 9');
 });
 
 test('invoice overview breaks down paid, unpaid, signed, and not-invoiced amounts', function () {

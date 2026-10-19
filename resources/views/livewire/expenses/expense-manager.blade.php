@@ -40,6 +40,14 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
+
+        if ($this->yearFilter === '') {
+            $this->yearFilter = (string) now()->year;
+        }
+
+        if ($this->monthFilter === '') {
+            $this->monthFilter = (string) now()->month;
+        }
     }
 
     public function updatingYearFilter(): void

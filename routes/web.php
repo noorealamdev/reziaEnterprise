@@ -126,6 +126,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:company_agreements.view')
         ->name('company-agreements.index');
 
+    Route::get('licenses', fn () => view('licenses.index'))
+        ->middleware('can:licenses.view')
+        ->name('licenses.index');
+
     // Bill Statement replaced the standalone Invoices list — this name is
     // kept only so any old link/bookmark to /invoices still lands somewhere
     // sensible instead of a broken page.
@@ -188,11 +192,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:expenses.view')
         ->name('expenses.index');
 
-    Route::get('sazzad', fn () => view('sajjat.index'))
+    Route::get('sajjat', fn () => view('sajjat.index'))
         ->middleware('can:sajjat.view')
         ->name('sajjat.index');
 
-    Route::get('sazzad/newspapers', fn () => view('sajjat.newspapers'))
+    Route::get('sajjat/newspapers', fn () => view('sajjat.newspapers'))
         ->middleware('can:sajjat.newspapers.view')
         ->name('sajjat.newspapers');
 

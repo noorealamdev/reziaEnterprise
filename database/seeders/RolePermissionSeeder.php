@@ -30,6 +30,8 @@ class RolePermissionSeeder extends Seeder
             Permission::EggPurchasesCreate,
             Permission::CompanyAgreementsView,
             Permission::CompanyAgreementsCreate,
+            Permission::LicensesView,
+            Permission::LicensesCreate,
             Permission::DailySummaryView,
             Permission::BillStatementView,
             Permission::InvoicesView,

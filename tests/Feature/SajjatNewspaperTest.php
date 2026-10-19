@@ -277,5 +277,5 @@ test('the newspaper permissions appear in the roles grid', function () {
     $this->actingAs(User::factory()->create(['role' => UserRole::SuperAdmin]));
 
     Volt::test('settings.role-permissions-manager')
-        ->assertSee('View Sazzad newspapers');
+        ->assertSee('View Sajjat newspapers');
 });

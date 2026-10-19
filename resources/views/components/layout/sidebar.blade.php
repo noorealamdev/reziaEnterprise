@@ -92,6 +92,19 @@
             </x-layout.sidebar-link>
         @endcan
 
+        @can('licenses.view')
+            <x-layout.sidebar-link :href="route('licenses.index')" :active="request()->routeIs('licenses.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3.5" y="5" width="17" height="14" rx="2" />
+                        <circle cx="8.5" cy="12" r="2" />
+                        <path d="M13 10.5h4M13 13.5h4" />
+                    </svg>
+                </x-slot:icon>
+                Licenses
+            </x-layout.sidebar-link>
+        @endcan
+
         @can('daily_summary.view')
             <x-layout.sidebar-link :href="route('daily-summary.index')" :active="request()->routeIs('daily-summary.*')">
                 <x-slot:icon>
@@ -179,7 +192,7 @@
                         <circle cx="16.5" cy="15" r="1" />
                     </svg>
                 </x-slot:icon>
-                Sazzad
+                Sajjat
             </x-layout.sidebar-link>
         @endcan
 

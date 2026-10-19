@@ -17,7 +17,7 @@ class CompanyAgreementSeeder extends Seeder
     public function run(): void
     {
         $ananta = Company::where('code', 'AAL')->first();
-        $simba = Company::where('code', 'SIMBA')->first();
+        $simba = Company::where('code', 'SFL')->first();
 
         if (! $ananta || ! $simba) {
             return;

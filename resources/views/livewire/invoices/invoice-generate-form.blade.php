@@ -124,9 +124,11 @@ new class extends Component
     }
 
     /**
-     * The selected company's Tiffin departments — only populated when the
-     * category is Tiffin, since that's the one category factories want
-     * billed per department instead of as one combined invoice.
+     * The selected company's Tiffin departments — populated for Tiffin
+     * (every company wants it billed per department instead of as one
+     * combined invoice), and also for Daily Basic Labour, but only for
+     * Simba Fashion, which bills that category separately per unit using
+     * the same department field/picker.
      */
     private function companyTiffinDepartments(): Collection
     {
@@ -134,11 +136,29 @@ new class extends Component
             return collect();
         }
 
-        if (ServiceCategory::find($this->service_category_id)?->name !== 'Tiffin') {
+        $categoryName = ServiceCategory::find($this->service_category_id)?->name;
+        $company = Company::find($this->company_id);
+
+        $applies = $categoryName === 'Tiffin'
+            || ($categoryName === 'Daily Basic Labour' && $company?->code === 'SFL');
+
+        if (! $applies) {
             return collect();
         }
 
-        return Company::find($this->company_id)?->tiffinDepartments()->orderBy('name')->get() ?? collect();
+        return $company?->tiffinDepartments()->orderBy('name')->get() ?? collect();
+    }
+
+    /**
+     * "Tiffin Department" for Tiffin, "Unit" for Simba's Daily Basic
+     * Labour — the same underlying field, labeled for what it means in
+     * each category.
+     */
+    private function departmentFieldLabel(): string
+    {
+        return ServiceCategory::find($this->service_category_id)?->name === 'Tiffin'
+            ? 'Tiffin Department'
+            : 'Unit';
     }
 
     /**
@@ -205,6 +225,7 @@ new class extends Component
             'companies' => Company::orderBy('name')->get(),
             'serviceCategories' => $serviceCategories,
             'tiffinDepartments' => $tiffinDepartments,
+            'departmentFieldLabel' => $this->departmentFieldLabel(),
             'periodOptions' => $periodOptions,
             'preview' => $preview,
         ];
@@ -241,16 +262,21 @@ new class extends Component
 
     @if ($tiffinDepartments->isNotEmpty())
         <div>
-            <x-input-label for="tiffin_department_id" value="Tiffin Department" />
+            <x-input-label for="tiffin_department_id" :value="$departmentFieldLabel" />
             <x-select-input wire:model.live="tiffin_department_id" id="tiffin_department_id" class="mt-1 block w-full" required>
-                <option value="">Select a department…</option>
+                <option value="">Select {{ $departmentFieldLabel === 'Unit' ? 'a unit' : 'a department' }}…</option>
                 @foreach ($tiffinDepartments as $department)
                     <option value="{{ $department->id }}">{{ $department->name }}</option>
                 @endforeach
             </x-select-input>
             <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                Factories want each Tiffin department billed separately — Swing and Wash Worker each get
-                their own invoice, never combined into one.
+                @if ($departmentFieldLabel === 'Unit')
+                    Simba Fashion bills Daily Basic Labour separately per unit — each unit gets its own
+                    invoice, never combined into one.
+                @else
+                    Factories want each Tiffin department billed separately — Swing and Wash Worker each get
+                    their own invoice, never combined into one.
+                @endif
             </p>
             <x-input-error :messages="$errors->get('tiffin_department_id')" class="mt-2" />
         </div>
@@ -263,7 +289,7 @@ new class extends Component
                 @if (! $service_category_id)
                     Select a category first
                 @elseif ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)
-                    Select a department first
+                    Select {{ $departmentFieldLabel === 'Unit' ? 'a unit' : 'a department' }} first
                 @else
                     Select a month…
                 @endif

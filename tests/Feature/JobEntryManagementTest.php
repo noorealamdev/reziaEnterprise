@@ -44,16 +44,23 @@ test('list renders a seeded entry and filters by company, category and month', f
     $this->actingAs($user)
         ->get('/job-entries')
         ->assertOk()
-        ->assertSeeVolt('job-entries.job-entry-list')
+        ->assertSeeVolt('job-entries.job-entry-list');
+
+    // Year/Month default to the current month, which neither fixture date
+    // falls in — cleared here so both are in view for the rest of this test.
+    Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->assertSee('15 Aug 2026')
         ->assertSee('15 Jul 2026');
 
     Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->set('companyFilter', (string) $companyA->id)
         ->assertSee('15 Aug 2026')
         ->assertDontSee('15 Jul 2026');
 
     Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->set('categoryFilter', (string) $categoryB->id)
         ->assertSee('15 Jul 2026')
         ->assertDontSee('15 Aug 2026');
@@ -77,9 +84,10 @@ test('a job entrys remarks is shown on its row in the list', function () {
         'remarks' => 'Client asked for an extra worker on this shift',
     ]);
 
-    $this->actingAs($user)
-        ->get('/job-entries')
-        ->assertOk()
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->assertSee('Client asked for an extra worker on this shift');
 });
 
@@ -107,7 +115,7 @@ test('a tiffin batchs shared remarks is shown once under its department, not per
     ]);
 
     $html = $this->actingAs($user)
-        ->get('/job-entries')
+        ->get('/job-entries?year=2026&month=8')
         ->assertOk()
         ->assertSee('Extra batch requested for a visiting buyer')
         ->getContent();
@@ -142,7 +150,7 @@ test('a loading unloading batchs items collapse into one card, with shared remar
     ]);
 
     $html = $this->actingAs($user)
-        ->get('/job-entries')
+        ->get('/job-entries?year=2026&month=8')
         ->assertOk()
         ->assertSee('Bosa Gari')
         ->assertSee('Daily Labour')
@@ -168,7 +176,7 @@ test('a single loading unloading entry on its own still groups as a plain row, n
 
     $this->actingAs($user);
 
-    $groupedEntries = Volt::test('job-entries.job-entry-list')->viewData('groupedEntries');
+    $groupedEntries = Volt::test('job-entries.job-entry-list')->set('yearFilter', '')->viewData('groupedEntries');
     $rowGroups = $groupedEntries->get('2026-08-15');
 
     // One card for the day, and that card holds exactly the one entry —
@@ -176,6 +184,40 @@ test('a single loading unloading entry on its own still groups as a plain row, n
     expect($rowGroups)->toHaveCount(1);
     expect($rowGroups->first())->toHaveCount(1);
     expect($rowGroups->first()->first()->id)->toBe($entry->id);
+});
+
+test('a Simba Daily Basic Labour entry with a unit renders as a plain row, not a Tiffin batch card', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'SFL']);
+    $labour = makeServiceCategory('Daily Basic Labour');
+    $unit1 = TiffinDepartment::create(['name' => 'Simba Unit-01']);
+
+    // tiffin_department_id is also reused for Simba's per-unit Daily Basic
+    // Labour entries — unlike an actual Tiffin entry, this must still group
+    // and render as a single plain row, showing the unit name inline, not
+    // the department-sectioned Tiffin card.
+    $entry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'tiffin_department_id' => $unit1->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Daily Basic Labour',
+        'bill_amount' => 6500,
+    ]);
+
+    $this->actingAs($user);
+
+    $groupedEntries = Volt::test('job-entries.job-entry-list')->set('yearFilter', '')->viewData('groupedEntries');
+    $rowGroups = $groupedEntries->get('2026-08-15');
+
+    expect($rowGroups)->toHaveCount(1);
+    expect($rowGroups->first())->toHaveCount(1);
+    expect($rowGroups->first()->first()->id)->toBe($entry->id);
+
+    $this->get('/job-entries?year=2026&month=8')
+        ->assertOk()
+        ->assertSee('Simba Unit-01')
+        ->assertSee('6,500.00');
 });
 
 test('year filter alone finds every entry in that year, and clears the month when changed', function () {
@@ -240,7 +282,7 @@ test('pagination never splits a single date across two pages', function () {
 
     $this->actingAs($user);
 
-    $page1 = Volt::test('job-entries.job-entry-list');
+    $page1 = Volt::test('job-entries.job-entry-list')->set('yearFilter', '');
     expect($page1->viewData('groupedEntries'))->toHaveCount(20);
     expect($page1->viewData('groupedEntries')['2026-09-10']->flatten(1))->toHaveCount(15);
     $page1->assertSee('10 Sep 2026')->assertDontSee('01 Jul 2026');
@@ -346,6 +388,78 @@ test('a tiffin batchs challan no. is applied to every entry created and shown on
         ->assertSee('Challan 712');
 });
 
+test('submitting a tiffin batch for a department/day that already has entries is rejected instead of creating duplicates', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+    $company->serviceCategories()->attach($tiffin);
+    $company->tiffinDepartments()->attach($swing);
+    makeTiffinRecipe($swing, ['Banana']);
+    $date = now()->toDateString();
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => $date,
+        'supply_type' => 'Banana',
+        'quantity' => 83,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', $date)
+        ->set('service_category_id', $tiffin->id)
+        ->set('batchQuantities.'.$swing->id.'.Banana', '83')
+        ->set('batchCostRates.'.$swing->id.'.Banana', '5')
+        ->call('saveTiffinItemBatch')
+        ->assertHasErrors(['batchQuantities']);
+
+    // Still exactly the one original entry — the resubmission never wrote
+    // a second row, which is the exact bug this guard exists to prevent.
+    $this->assertDatabaseCount('job_entries', 1);
+});
+
+test('submitting a tiffin batch for an untouched department on an already-entered day is unaffected', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $tiffin = makeServiceCategory('Tiffin');
+    $swing = TiffinDepartment::create(['name' => 'Swing']);
+    $washWorker = TiffinDepartment::create(['name' => 'Wash Worker']);
+    $company->serviceCategories()->attach($tiffin);
+    $company->tiffinDepartments()->attach([$swing->id, $washWorker->id]);
+    makeTiffinRecipe($swing, ['Banana']);
+    makeTiffinRecipe($washWorker, ['Banana']);
+    $date = now()->toDateString();
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $swing->id,
+        'entry_date' => $date,
+        'supply_type' => 'Banana',
+        'quantity' => 83,
+    ]);
+
+    $this->actingAs($user);
+
+    // Swing already has entries for today, but Wash Worker doesn't — only
+    // Wash Worker is being submitted here, so this must go through fine.
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', $date)
+        ->set('service_category_id', $tiffin->id)
+        ->set('batchQuantities.'.$washWorker->id.'.Banana', '50')
+        ->set('batchCostRates.'.$washWorker->id.'.Banana', '5')
+        ->call('saveTiffinItemBatch')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseCount('job_entries', 2);
+});
+
 test('rate auto-fill populates cost and bill rate from the most recent job entry', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -431,6 +545,75 @@ test('tiffin department is required for Tiffin category', function () {
         ->assertHasErrors(['tiffin_department_id']);
 });
 
+test('a unit is required for Daily Basic Labour at Simba Fashion, and saves against the chosen unit', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'SFL']);
+    $category = makeServiceCategory('Daily Basic Labour');
+    $company->serviceCategories()->attach($category);
+    $unit1 = TiffinDepartment::create(['name' => 'Simba Unit-01']);
+    $company->tiffinDepartments()->attach($unit1->id);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'Daily Basic Labour')
+        ->set('cost_amount', '500')
+        ->set('bill_amount', '650')
+        ->call('save')
+        ->assertHasErrors(['tiffin_department_id']);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('tiffin_department_id', $unit1->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'Daily Basic Labour')
+        ->set('cost_amount', '500')
+        ->set('bill_amount', '650')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertRedirect(route('job-entries.index'));
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'tiffin_department_id' => $unit1->id,
+        'bill_amount' => 650,
+    ]);
+});
+
+test('Daily Basic Labour at a company other than Simba Fashion never requires a unit, even with departments configured', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'AAL']);
+    $category = makeServiceCategory('Daily Basic Labour');
+    $company->serviceCategories()->attach($category);
+    $department = TiffinDepartment::create(['name' => 'Swing']);
+    $company->tiffinDepartments()->attach($department->id);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'Daily Basic Labour')
+        ->set('cost_amount', '500')
+        ->set('bill_amount', '650')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertRedirect(route('job-entries.index'));
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'tiffin_department_id' => null,
+        'bill_amount' => 650,
+    ]);
+});
+
 test('selecting Loading Unloading shows every active item at once', function () {
     $user = User::factory()->create();
     $company = Company::factory()->create();
@@ -493,6 +676,37 @@ test('filling in two Loading Unloading items on one submission creates entries f
         'cost_amount' => 2000,
         'bill_amount' => 2400,
     ]);
+});
+
+test('submitting a Loading Unloading batch for a company/day that already has entries is rejected instead of creating duplicates', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+    $company->serviceCategories()->attach($category);
+    $big = LoadingUnloadingItem::create(['name' => 'Big', 'unit_label' => 'Cover Van', 'sort_order' => 1]);
+    $date = now()->toDateString();
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => $date,
+        'supply_type' => 'Big',
+        'quantity' => 18,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('entry_date', $date)
+        ->set('service_category_id', $category->id)
+        ->set("batchLUQuantities.{$big->name}", '18')
+        ->set("batchLUCostRates.{$big->name}", '700')
+        ->set("batchLUBillRates.{$big->name}", '850')
+        ->call('saveLoadingUnloadingBatch')
+        ->assertHasErrors(['batchLUQuantities']);
+
+    $this->assertDatabaseCount('job_entries', 1);
 });
 
 test('leaving a Loading Unloading item blank skips it instead of requiring it', function () {
@@ -671,7 +885,36 @@ test('the job entries list shows shipment tiffin cost when set, on both a batch 
     $this->actingAs($user);
 
     Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->assertSeeInOrder(['Shipment Tiffin Cost: 500.00', 'Shipment Tiffin Cost: 250.00']);
+});
+
+test('the job entries list folds shipment tiffin cost into the shown Cost, but never into Bill', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Loading Unloading');
+
+    // A standalone single entry, so Cost renders unambiguously on its own
+    // row rather than inside a multi-item batch card.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => '2026-09-10',
+        'supply_type' => 'Wash',
+        'cost_amount' => 12600,
+        'bill_amount' => 15300,
+        'shipment_tiffin_cost' => 500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
+        // Cost includes the shipment cost (12,600 + 500) — never added to
+        // Bill, which stays exactly what was agreed with the factory.
+        ->assertSee('Cost 13,100.00', false)
+        ->assertDontSee('Cost 12,600.00', false)
+        ->assertSee('15,300.00');
 });
 
 test('the job entries list does not mention shipment tiffin cost when none was recorded', function () {
@@ -789,6 +1032,68 @@ test('buyer and style are required for Embroidery and Print category', function 
         ->set('bill_amount', '15')
         ->call('save')
         ->assertHasErrors(['buyer', 'style']);
+});
+
+test('a collected-from company is required for Combustible Material, and persists what was selected', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $source = Company::factory()->create(['name' => 'Some Textile Factory']);
+    $category = makeServiceCategory('Combustible Material');
+    $company->serviceCategories()->attach($category);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'Floor Dust')
+        ->set('cost_amount', '10')
+        ->set('bill_amount', '15')
+        ->call('save')
+        ->assertHasErrors(['collected_from_company_id']);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('collected_from_company_id', $source->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'Floor Dust')
+        ->set('cost_amount', '10')
+        ->set('bill_amount', '15')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'collected_from_company_id' => $source->id,
+    ]);
+});
+
+test('collected-from company is not required and is cleared for any other category', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Diesel Oil Supply');
+    $company->serviceCategories()->attach($category);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.job-entry-form')
+        ->set('company_id', $company->id)
+        ->set('service_category_id', $category->id)
+        ->set('entry_date', now()->toDateString())
+        ->set('supply_type', 'Diesel')
+        ->set('cost_amount', '95')
+        ->set('bill_amount', '110')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('job_entries', [
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'collected_from_company_id' => null,
+    ]);
 });
 
 test('challan number is not required for Diesel category', function () {
@@ -1186,16 +1491,19 @@ test('list filters by item and billed status', function () {
     $this->actingAs($user);
 
     Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->set('itemFilter', 'Daily Basic Labour')
         ->assertSee('15 Aug 2026')
         ->assertDontSee('10 Jul 2026');
 
     Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->set('statusFilter', 'unbilled')
         ->assertSee('15 Aug 2026')
         ->assertDontSee('10 Jul 2026');
 
     Volt::test('job-entries.job-entry-list')
+        ->set('yearFilter', '')
         ->set('statusFilter', 'billed')
         ->assertSee('10 Jul 2026')
         ->assertDontSee('15 Aug 2026');
@@ -1468,6 +1776,55 @@ test('the tiffin batch edit form also locks cost rate from a matching purchase',
         'cost_rate' => 16,
         'quantity' => 55,
         'cost_amount' => 880,
+    ]);
+});
+
+test('the tiffin batch edit form never pulls in a same-day Daily Basic Labour entry sharing the same unit', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create(['code' => 'SFL']);
+    $unit1 = TiffinDepartment::create(['name' => 'Simba Unit-01']);
+    $tiffin = makeServiceCategory('Tiffin');
+    $labour = makeServiceCategory('Daily Basic Labour');
+
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $tiffin->id,
+        'tiffin_department_id' => $unit1->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Egg',
+        'quantity' => 40,
+        'cost_rate' => 5,
+        'bill_rate' => 30,
+    ]);
+
+    // tiffin_department_id is also reused for Simba's per-unit Daily Basic
+    // Labour entries — this one shares the exact same company/unit/day as
+    // the Tiffin batch above, and must never be swept into it (or its own
+    // bill_rate would be zeroed out as a non-Egg item when the batch saves).
+    $labourEntry = JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'tiffin_department_id' => $unit1->id,
+        'entry_date' => '2026-08-15',
+        'supply_type' => 'Daily Basic Labour',
+        'quantity' => 10,
+        'cost_rate' => 550,
+        'bill_rate' => 650,
+        'cost_amount' => 5500,
+        'bill_amount' => 6500,
+    ]);
+
+    $this->actingAs($user);
+
+    Volt::test('job-entries.tiffin-batch-edit-form', ['company' => $company, 'department' => $unit1, 'date' => '2026-08-15'])
+        ->assertDontSeeHtml('Daily Basic Labour')
+        ->call('save')
+        ->assertHasNoErrors();
+
+    $this->assertDatabaseHas('job_entries', [
+        'id' => $labourEntry->id,
+        'bill_rate' => 650,
+        'bill_amount' => 6500,
     ]);
 });
 

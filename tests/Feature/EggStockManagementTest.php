@@ -195,6 +195,7 @@ test('recording waste persists it and reduces stock on hand', function () {
     $this->actingAs($user);
 
     Volt::test('egg-purchases.purchase-manager')
+        ->set('wasteYearFilter', '')
         ->call('switchView', 'waste')
         ->call('startCreateWaste')
         ->set('waste_date', '2026-09-05')

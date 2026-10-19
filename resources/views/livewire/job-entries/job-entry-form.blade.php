@@ -35,6 +35,8 @@ new class extends Component
 
     public ?string $floor = null;
 
+    public ?int $collected_from_company_id = null;
+
     public ?string $challan_no = null;
 
     public ?string $company_adv_payment = null;
@@ -113,6 +115,7 @@ new class extends Component
             $this->buyer = $entry->buyer;
             $this->style = $entry->style;
             $this->floor = $entry->floor;
+            $this->collected_from_company_id = $entry->collected_from_company_id;
             $this->challan_no = $entry->challan_no;
             $this->company_adv_payment = $entry->company_adv_payment !== null ? (string) $entry->company_adv_payment : null;
             $this->shipment_tiffin_cost = $entry->shipment_tiffin_cost !== null ? (string) $entry->shipment_tiffin_cost : null;
@@ -155,7 +158,7 @@ new class extends Component
         $tiffinId = $this->categoryIds['Tiffin'] ?? null;
         $etpEidId = $this->categoryIds['ETP Eid Holiday'] ?? null;
 
-        if ($this->service_category_id != $tiffinId) {
+        if (! $this->keepsDepartmentField($this->service_category_id)) {
             $this->tiffin_department_id = null;
         }
 
@@ -171,6 +174,7 @@ new class extends Component
         $this->buyer = null;
         $this->style = null;
         $this->floor = null;
+        $this->collected_from_company_id = null;
         $this->company_adv_payment = null;
         $this->shipment_tiffin_cost = null;
         $this->refreshMultiItemMode();
@@ -240,6 +244,25 @@ new class extends Component
      * cost rate, and only when a purchase actually matches, so a date
      * change never wipes quantities/rates that were already typed in.
      */
+    /**
+     * Tiffin always picks a department. Simba Fashion also bills Daily
+     * Basic Labour separately per unit (reusing the same department
+     * picker/field) — every other company's Daily Basic Labour entries
+     * are unaffected.
+     */
+    private function keepsDepartmentField(?int $categoryId): bool
+    {
+        $tiffinId = $this->categoryIds['Tiffin'] ?? null;
+        $dailyBasicLabourId = $this->categoryIds['Daily Basic Labour'] ?? null;
+
+        if ($categoryId == $tiffinId) {
+            return true;
+        }
+
+        return $categoryId == $dailyBasicLabourId
+            && Company::find($this->company_id)?->code === 'SFL';
+    }
+
     private function applyPurchaseLocks(): void
     {
         foreach ($this->tiffinDepartmentsWithItems() as $department) {
@@ -465,12 +488,13 @@ new class extends Component
         $embroideryId = $this->categoryIds['Embroidery & Print'] ?? null;
         $loadingUnloadingId = $this->categoryIds['Loading Unloading'] ?? null;
         $etpEidId = $this->categoryIds['ETP Eid Holiday'] ?? null;
+        $combustibleId = $this->categoryIds['Combustible Material'] ?? null;
 
         $validated = $this->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'],
             'service_category_id' => ['required', 'integer', 'exists:service_categories,id'],
             'tiffin_department_id' => [
-                Rule::requiredIf(fn () => $this->service_category_id == $tiffinId),
+                Rule::requiredIf(fn () => $this->keepsDepartmentField($this->service_category_id)),
                 'nullable', 'integer', 'exists:tiffin_departments,id',
             ],
             'entry_date' => ['required', 'date'],
@@ -489,6 +513,10 @@ new class extends Component
             // shows one). Kept nullable only for editing a legacy entry
             // that already has one set.
             'floor' => ['nullable', 'string', 'max:255'],
+            'collected_from_company_id' => [
+                Rule::requiredIf(fn () => $this->service_category_id == $combustibleId),
+                'nullable', 'integer', 'exists:companies,id',
+            ],
             'challan_no' => ['nullable', 'string', 'max:255'],
             'company_adv_payment' => ['nullable', 'numeric', 'min:0'],
             'shipment_tiffin_cost' => ['nullable', 'numeric', 'min:0'],
@@ -502,7 +530,7 @@ new class extends Component
             'in_charge' => ['nullable', 'string', 'max:255'],
         ]);
 
-        if ($validated['service_category_id'] != $tiffinId) {
+        if (! $this->keepsDepartmentField($validated['service_category_id'])) {
             $validated['tiffin_department_id'] = null;
         }
 
@@ -514,6 +542,10 @@ new class extends Component
         if ($validated['service_category_id'] != $loadingUnloadingId) {
             $validated['floor'] = null;
             $validated['shipment_tiffin_cost'] = null;
+        }
+
+        if ($validated['service_category_id'] != $combustibleId) {
+            $validated['collected_from_company_id'] = null;
         }
 
         if ($validated['service_category_id'] != $etpEidId) {
@@ -584,6 +616,26 @@ new class extends Component
 
         if ($touchedDepartments->isEmpty()) {
             $this->addError('batchQuantities', 'Enter quantities for at least one department.');
+
+            return;
+        }
+
+        // A department's whole day is saved and edited together (see the
+        // batch-edit screen) — submitting Create again for a department/day
+        // that already has entries would silently double every quantity,
+        // exactly what happened to produce the real duplicate rows this
+        // guard was added to prevent. Reject the whole batch rather than
+        // partially saving, and point at Edit instead.
+        $alreadyEnteredDepartments = $touchedDepartments->filter(
+            fn ($department) => JobEntry::where('company_id', $this->company_id)
+                ->where('tiffin_department_id', $department->id)
+                ->whereDate('entry_date', $this->entry_date)
+                ->exists()
+        );
+
+        if ($alreadyEnteredDepartments->isNotEmpty()) {
+            $names = $alreadyEnteredDepartments->pluck('name')->implode(', ');
+            $this->addError('batchQuantities', "{$names} already has Tiffin entries for this date — edit them from the Job Entries list instead of creating new ones.");
 
             return;
         }
@@ -741,6 +793,20 @@ new class extends Component
 
         if ($touchedItems->isEmpty()) {
             $this->addError('batchLUQuantities', 'Enter a quantity for at least one item.');
+
+            return;
+        }
+
+        // Same "a day is saved and edited together" guard as Tiffin's batch
+        // — submitting Create again for a company/day already entered would
+        // double every quantity instead of silently doing nothing useful.
+        $alreadyEntered = JobEntry::where('company_id', $this->company_id)
+            ->where('service_category_id', $this->service_category_id)
+            ->whereDate('entry_date', $this->entry_date)
+            ->exists();
+
+        if ($alreadyEntered) {
+            $this->addError('batchLUQuantities', 'Loading Unloading entries already exist for this company on this date — edit them from the Job Entries list instead of creating new ones.');
 
             return;
         }
@@ -909,6 +975,7 @@ new class extends Component
 
         return [
             'companies' => Company::orderBy('name')->get(),
+            'selectedCompany' => $company,
             'serviceCategories' => $company ? $company->serviceCategories()->orderBy('sort_order')->get() : collect(),
             'tiffinDepartments' => $company ? $company->tiffinDepartments()->orderBy('name')->get() : collect(),
             'supplyTypeSuggestions' => ($this->company_id && $this->service_category_id)
@@ -957,6 +1024,24 @@ new class extends Component
             <x-text-input wire:model.live="entry_date" id="entry_date" type="date" class="mt-1 block w-full" required />
             <x-input-error :messages="$errors->get('entry_date')" class="mt-2" />
         </div>
+
+        @if ($selectedCompany?->code === 'SFL')
+            {{-- Simba Fashion bills Daily Basic Labour separately per unit —
+            reusing the same department field Tiffin already uses. --}}
+            <div x-show="$wire.service_category_id == {{ $categoryIds['Daily Basic Labour'] ?? 0 }}" x-cloak>
+                <x-input-label for="daily_labour_unit_id" value="Unit" />
+                <x-select-input wire:model.live="tiffin_department_id" id="daily_labour_unit_id" class="mt-1 block w-full">
+                    <option value="">Select a unit…</option>
+                    @foreach ($tiffinDepartments as $department)
+                        <option value="{{ $department->id }}">{{ $department->name }}</option>
+                    @endforeach
+                </x-select-input>
+                <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
+                    Simba Fashion bills Daily Basic Labour separately per unit.
+                </p>
+                <x-input-error :messages="$errors->get('tiffin_department_id')" class="mt-2" />
+            </div>
+        @endif
 
         @if ($jobEntry)
             {{-- Legacy single-entry Tiffin editing — normal Tiffin entries are
@@ -1271,6 +1356,18 @@ new class extends Component
             </div>
         </div>
 
+        <div x-show="$wire.service_category_id == {{ $categoryIds['Combustible Material'] ?? 0 }}" x-cloak>
+            <x-input-label for="collected_from_company_id" value="Collected From" />
+            <x-select-input wire:model="collected_from_company_id" id="collected_from_company_id" class="mt-1 block w-full">
+                <option value="">Select a company…</option>
+                @foreach ($companies as $sourceCompany)
+                    <option value="{{ $sourceCompany->id }}">{{ $sourceCompany->name }}</option>
+                @endforeach
+            </x-select-input>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Which company this material was collected from.</p>
+            <x-input-error :messages="$errors->get('collected_from_company_id')" class="mt-2" />
+        </div>
+
         @if ($jobEntry)
             {{-- Legacy field — only ever shown editing an old entry that
             already has a floor set. New Loading Unloading entries go
@@ -1378,7 +1475,9 @@ new class extends Component
                 x-show="$wire.multiItemMode"
                 x-cloak
                 wire:click="saveTiffinItemBatch"
-                class="inline-flex items-center px-4 py-2 bg-slate-800 dark:bg-slate-200 border border-transparent rounded-md font-semibold text-xs text-white dark:text-slate-800 uppercase tracking-widest hover:bg-slate-700 dark:hover:bg-white focus:bg-slate-700 dark:focus:bg-white active:bg-slate-900 dark:active:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800 transition ease-in-out duration-150"
+                wire:loading.attr="disabled"
+                wire:target="saveTiffinItemBatch"
+                class="inline-flex items-center px-4 py-2 bg-slate-800 dark:bg-slate-200 border border-transparent rounded-md font-semibold text-xs text-white dark:text-slate-800 uppercase tracking-widest hover:bg-slate-700 dark:hover:bg-white focus:bg-slate-700 dark:focus:bg-white active:bg-slate-900 dark:active:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800 disabled:opacity-25 transition ease-in-out duration-150"
             >
                 Save Tiffin Entries
             </button>
@@ -1388,12 +1487,14 @@ new class extends Component
                 x-show="$wire.loadingUnloadingBatchMode"
                 x-cloak
                 wire:click="saveLoadingUnloadingBatch"
-                class="inline-flex items-center px-4 py-2 bg-slate-800 dark:bg-slate-200 border border-transparent rounded-md font-semibold text-xs text-white dark:text-slate-800 uppercase tracking-widest hover:bg-slate-700 dark:hover:bg-white focus:bg-slate-700 dark:focus:bg-white active:bg-slate-900 dark:active:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800 transition ease-in-out duration-150"
+                wire:loading.attr="disabled"
+                wire:target="saveLoadingUnloadingBatch"
+                class="inline-flex items-center px-4 py-2 bg-slate-800 dark:bg-slate-200 border border-transparent rounded-md font-semibold text-xs text-white dark:text-slate-800 uppercase tracking-widest hover:bg-slate-700 dark:hover:bg-white focus:bg-slate-700 dark:focus:bg-white active:bg-slate-900 dark:active:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800 disabled:opacity-25 transition ease-in-out duration-150"
             >
                 Save Loading Unloading Entries
             </button>
 
-            <x-primary-button x-show="! $wire.multiItemMode && ! $wire.loadingUnloadingBatchMode && {{ ($tiffinBlockedNoDepartments || $loadingUnloadingBlockedNoItems) ? 'false' : 'true' }}">
+            <x-primary-button x-show="! $wire.multiItemMode && ! $wire.loadingUnloadingBatchMode && {{ ($tiffinBlockedNoDepartments || $loadingUnloadingBlockedNoItems) ? 'false' : 'true' }}" wire:loading.attr="disabled" wire:target="save">
                 {{ $jobEntry ? 'Save Changes' : 'Create Entry' }}
             </x-primary-button>
         </div>

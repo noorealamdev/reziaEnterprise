@@ -3,6 +3,7 @@
 use App\Models\EggSale;
 use App\Models\EggWaste;
 use App\Models\JobEntry;
+use App\Models\ServiceCategory;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
 use Illuminate\Pagination\LengthAwarePaginator;
@@ -114,6 +115,21 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
+
+        if ($this->yearFilter === '' && $this->rangeFilter === '') {
+            $this->yearFilter = (string) now()->year;
+            $this->monthFilter = (string) now()->month;
+        }
+
+        if ($this->supplyYearFilter === '' && $this->supplyRangeFilter === '') {
+            $this->supplyYearFilter = (string) now()->year;
+            $this->supplyMonthFilter = (string) now()->month;
+        }
+
+        if ($this->wasteYearFilter === '' && $this->wasteRangeFilter === '') {
+            $this->wasteYearFilter = (string) now()->year;
+            $this->wasteMonthFilter = (string) now()->month;
+        }
     }
 
     public function updatingItemFilter(): void
@@ -598,12 +614,20 @@ new class extends Component
      */
     private function supplyReport(): array
     {
+        // tiffin_department_id is also reused for Simba Fashion's per-unit
+        // Daily Basic Labour entries — this report is Tiffin ingredient
+        // supply only, so it must stay scoped to the Tiffin category or
+        // "Daily Basic Labour" itself would show up as a supply item.
+        $tiffinCategoryId = ServiceCategory::where('name', 'Tiffin')->value('id');
+
         $supplyItems = JobEntry::whereNotNull('tiffin_department_id')
+            ->where('service_category_id', $tiffinCategoryId)
             ->distinct()
             ->orderBy('supply_type')
             ->pluck('supply_type');
 
         $itemEntries = JobEntry::whereNotNull('tiffin_department_id')
+            ->where('service_category_id', $tiffinCategoryId)
             ->where('supply_type', $this->supplyItemFilter)
             ->get(['entry_date', 'quantity']);
 
@@ -754,7 +778,7 @@ new class extends Component
                     <button
                         type="button"
                         wire:click="$set('rangeFilter', '{{ $value }}')"
-                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $rangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ ($value === '' ? ($rangeFilter === '' && ! $yearFilter) : $rangeFilter === (string) $value) ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
                     >
                         {{ $label }}
                     </button>
@@ -845,7 +869,7 @@ new class extends Component
                     <button
                         type="button"
                         wire:click="$set('supplyRangeFilter', '{{ $value }}')"
-                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $supplyRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ ($value === '' ? ($supplyRangeFilter === '' && ! $supplyYearFilter) : $supplyRangeFilter === (string) $value) ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
                     >
                         {{ $label }}
                     </button>
@@ -913,7 +937,7 @@ new class extends Component
                     <button
                         type="button"
                         wire:click="$set('wasteRangeFilter', '{{ $value }}')"
-                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $wasteRangeFilter === (string) $value ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ ($value === '' ? ($wasteRangeFilter === '' && ! $wasteYearFilter) : $wasteRangeFilter === (string) $value) ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
                     >
                         {{ $label }}
                     </button>

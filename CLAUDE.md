@@ -210,3 +210,88 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 - After the feature tests pass, ask the user to run the complete suite with `php artisan test --compact`.
 
 </laravel-boost-guidelines>
+
+<!--
+  The section below is maintained by hand, not by Laravel Boost. Keep it
+  outside the <laravel-boost-guidelines> block above so Boost's own
+  regeneration never overwrites it.
+-->
+
+# Application Overview
+
+Rezia Enterprise — billing/invoicing system for a service business that
+supplies several factory clients (companies) with labour, Tiffin (meal)
+service, materials, and other site services, then bills them per job entry.
+
+## Core domain model
+
+- **Company** — a client factory (e.g. Ananta Apparels Ltd, Simba Fashion
+  Ltd, Progress Apparels Ltd.). Has a unique `code` (e.g. `AAL`, `SFL`,
+  `PAL`) — always verify a company's real `code` against the database
+  before hardcoding it; it will not match seeded demo data.
+- **ServiceCategory** — what's being billed: Daily Basic Labour, Tiffin,
+  Loading Unloading, Embroidery & Print, ETP Eid Holiday, Diesel Oil
+  Supply, Combustible Material, Construction Material Supply, etc. Each
+  category can have its own extra fields on the job entry form (e.g.
+  Embroidery & Print requires Buyer/Style).
+- **JobEntry** — one line of billable work (a day's labour, a Tiffin
+  batch item, a material delivery, ...). Has `cost_amount`/`bill_amount`,
+  computed `profit_amount`, and links to an `Invoice` once billed
+  (`invoice_id`). Entries with no invoice yet are "unbilled"/"pending".
+- **Invoice** — generated per company + category + month (via
+  `invoices.create`), pulling in that scope's unbilled entries. A company
+  can have several concurrent invoices across categories/units in the
+  same month. Status: due, partial, paid.
+- **TiffinDepartment** — originally just Tiffin's per-department billing
+  split (e.g. Swing, Wash Worker), but is also reused as the mechanism
+  for Simba Fashion's physical units (see below) — the field name
+  (`tiffin_department_id`) predates that second use, so don't assume it
+  always means "Tiffin".
+
+## Company-specific customizations
+
+- **Simba Fashion Ltd (code `SFL`)** operates 4 physical units and bills
+  Daily Basic Labour and Tiffin separately per unit. This reuses the
+  `TiffinDepartment` mechanism (units are literally `TiffinDepartment`
+  rows named "Simba Unit-01..04", attached only to this company) rather
+  than a new concept. Gated by hardcoded `company->code === 'SFL'` checks
+  in `job-entry-form.blade.php` and `invoice-generate-form.blade.php` —
+  intentionally not a generic multi-company feature (user's choice).
+  Adding a 5th unit: create a new `TiffinDepartment` (Service Categories →
+  Manage Items → Tiffin Departments) and attach it to Simba Fashion Ltd's
+  company record (Companies → edit → Tiffin Departments checklist).
+- **Progress Apparels Ltd. (code `PAL`)** uses the Combustible Material
+  category (Floor Dust, Fire Wood, collected as factory byproduct) and
+  has a "Collected From" field (`collected_from_company_id`, FK to
+  `companies`) recording which other company the material came from.
+
+## Dashboard (redesigned 2026-10)
+
+The Dashboard (`resources/views/livewire/dashboard/dashboard.blade.php`)
+is the one place a factory's whole financial picture lives — there is no
+separate "Cost & Profit Report" page anymore (removed; its by-company/
+by-category, All Work vs Paid Only profit breakdown was folded into the
+Dashboard's "Companies — Cost & Profit" table, which shows every company,
+never truncated). Structure: stat cards (Unbilled/Billed/Outstanding/
+Profit This Month, all clickable through to the relevant Bill Statement
+filter or the Companies table) → Pending Bills (Ready to Invoice + Invoice
+Overview) → Companies — Cost & Profit table → Today's Activity → trend
+chart + Agreement Deadlines → Expenses.
+
+## Working conventions from this project's history
+
+- This is a WAMP (Windows) environment. PHP: full path
+  `C:\wamp64\bin\php\php8.2.29\php.exe` (not reliably on PATH in
+  tool-spawned shells). MySQL:
+  `C:\wamp64\bin\mysql\mysql8.4.7\bin\mysql.exe -u root`.
+- The local `reziaenterprise` MySQL database holds **real production
+  data**, not disposable test fixtures — always confirm before
+  destructive operations, verify nothing is already invoiced/linked
+  before deleting a row, and never run `DatabaseSeeder` (full demo
+  seeder) against it — it wipes and rebuilds Simba Fashion's data.
+- `reziaenterprise.com` resolves to a real public IP, not this machine —
+  never use it to preview local changes. Use `php artisan serve` and hit
+  `127.0.0.1` instead; remember to stop the server afterward.
+- Running the full test suite (`vendor/bin/pest`) can exhaust PHP's
+  default 128M CLI memory limit; pass
+  `php -d memory_limit=1024M vendor/bin/pest` for a full run.
