@@ -20,7 +20,7 @@ test('ProductionSeeder seeds real setup data only, with none of the demo/dummy d
     $this->assertDatabaseMissing('users', ['email' => 'test@example.com']);
     $this->assertDatabaseCount('job_entries', 0);
     $this->assertDatabaseCount('tiffin_item_purchases', 0);
-    $this->assertDatabaseCount('egg_sales', 0);
+    $this->assertDatabaseCount('egg_sale_transactions', 0);
     $this->assertDatabaseCount('invoices', 0);
     $this->assertDatabaseCount('invoice_payments', 0);
     $this->assertDatabaseCount('company_purchases', 0);

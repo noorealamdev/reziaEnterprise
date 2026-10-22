@@ -1,7 +1,7 @@
 <?php
 
 use App\Models\Company;
-use App\Models\EggSale;
+use App\Models\EggSaleTransaction;
 use App\Models\EggWaste;
 use App\Models\JobEntry;
 use App\Models\RolePermission;
@@ -50,11 +50,12 @@ test('the stock summary nets purchases minus tiffin consumption minus external s
         'quantity' => 99999,
     ]);
 
-    EggSale::create([
-        'sale_date' => '2026-09-03',
+    EggSaleTransaction::create([
+        'transaction_date' => '2026-09-03',
+        'type' => EggSaleTransaction::TYPE_SOLD,
         'quantity' => 150,
-        'sale_rate' => 14,
-        'sale_amount' => 2100,
+        'amount' => 2100,
+        'description' => 'Local Market Vendor',
     ]);
 
     EggWaste::create([
@@ -108,11 +109,12 @@ test('egg profit counts both Tiffin\'s internal use and external sales against t
 
     // An outside buyer pays 150 * 14 = 2,100 — a completely different rate
     // than Tiffin's, and must still count toward total profit.
-    EggSale::create([
-        'sale_date' => '2026-09-03',
+    EggSaleTransaction::create([
+        'transaction_date' => '2026-09-03',
+        'type' => EggSaleTransaction::TYPE_SOLD,
         'quantity' => 150,
-        'sale_rate' => 14,
-        'sale_amount' => 2100,
+        'amount' => 2100,
+        'description' => 'Outside buyer',
     ]);
 
     // 550 eggs are still unsold/unused (in stock or wasted) — their cost is

@@ -209,6 +209,20 @@
             </x-layout.sidebar-link>
         @endcan
 
+        @can('canteen.view')
+            <x-layout.sidebar-link :href="route('canteen.index')" :active="request()->routeIs('canteen.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 8h16l-1 2H5l-1-2z" />
+                        <path d="M6 10v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-9" />
+                        <path d="M7 4.5c0-1 .9-1.5 2-1.5h6c1.1 0 2 .5 2 1.5" />
+                        <path d="M9 14v4M12 14v4M15 14v4" />
+                    </svg>
+                </x-slot:icon>
+                Canteen
+            </x-layout.sidebar-link>
+        @endcan
+
         @can('personal-ledger.manage')
             <x-layout.sidebar-link :href="route('personal-ledger.index')" :active="request()->routeIs('personal-ledger.*')">
                 <x-slot:icon>

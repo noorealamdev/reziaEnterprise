@@ -68,11 +68,6 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
-
-        if ($this->yearFilter === '' && $this->rangeFilter === '' && $this->dateFrom === '' && $this->dateTo === '') {
-            $this->yearFilter = (string) now()->year;
-            $this->monthFilter = (string) now()->month;
-        }
     }
 
     public function updatingYearFilter(): void

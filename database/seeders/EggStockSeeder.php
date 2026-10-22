@@ -2,8 +2,7 @@
 
 namespace Database\Seeders;
 
-use App\Models\EggBuyer;
-use App\Models\EggSale;
+use App\Models\EggSaleTransaction;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
 use Illuminate\Database\Seeder;
@@ -79,14 +78,14 @@ class EggStockSeeder extends Seeder
 
         foreach ($sales as $sale) {
             $date = $today->copy()->subDays($sale['daysAgo'])->toDateString();
-            $buyer = EggBuyer::firstOrCreate(['name' => $sale['buyer']]);
 
-            EggSale::updateOrCreate(
-                ['sale_date' => $date, 'egg_buyer_id' => $buyer->id],
+            EggSaleTransaction::updateOrCreate(
+                ['transaction_date' => $date, 'description' => $sale['buyer']],
                 [
+                    'type' => EggSaleTransaction::TYPE_SOLD,
                     'quantity' => $sale['quantity'],
-                    'sale_rate' => $sale['saleRate'],
-                    'sale_amount' => round($sale['quantity'] * $sale['saleRate'], 2),
+                    'rate' => $sale['saleRate'],
+                    'amount' => round($sale['quantity'] * $sale['saleRate'], 2),
                 ]
             );
         }

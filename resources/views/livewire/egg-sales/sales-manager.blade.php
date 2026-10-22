@@ -1,11 +1,7 @@
 <?php
 
-use App\Models\EggBuyer;
-use App\Models\EggBuyerPayment;
-use App\Models\EggInCharge;
-use App\Models\EggInChargeTransaction;
-use App\Models\EggSale;
-use Illuminate\Pagination\LengthAwarePaginator;
+use App\Models\EggSaleTransaction;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
@@ -18,870 +14,379 @@ new class extends Component
 {
     use WithPagination;
 
-    private const SALES_PER_PAGE = 20;
-
-    #[Url(as: 'view', history: true)]
-    public string $activeView = 'sales';
-
     #[Url(as: 'year', history: true)]
-    public string $saleYearFilter = '';
+    public string $yearFilter = '';
 
     #[Url(as: 'month', history: true)]
-    public string $saleMonthFilter = '';
+    public string $monthFilter = '';
 
-    /** Quick range: '' (use Year/Month), '7' (last 7 days) or '15' (last 15 days). */
+    /** '' (all), 'received', 'sold' or 'payment'. */
+    #[Url(as: 'type', history: true)]
+    public string $typeFilter = '';
+
+    /** Matches the description or remarks. */
+    #[Url(as: 'q', history: true)]
+    public string $search = '';
+
+    /** Quick range in days: '' (use the other date filters), '1' (today), '7', '15' or '30'. */
     #[Url(as: 'range', history: true)]
-    public string $saleRangeFilter = '';
+    public string $rangeFilter = '';
 
-    #[Url(as: 'buyer', history: true)]
-    public string $saleBuyerFilter = '';
+    #[Url(as: 'from', history: true)]
+    public string $dateFrom = '';
 
-    #[Url(as: 'in_charge', history: true)]
-    public string $saleInChargeFilter = '';
+    #[Url(as: 'to', history: true)]
+    public string $dateTo = '';
 
-    #[Url(as: 'summary_year', history: true)]
-    public string $summaryYearFilter = '';
+    public ?int $editingId = null;
 
-    #[Url(as: 'summary_month', history: true)]
-    public string $summaryMonthFilter = '';
+    public string $type = EggSaleTransaction::TYPE_SOLD;
 
-    #[Url(as: 'ic_summary_year', history: true)]
-    public string $inChargeSummaryYearFilter = '';
+    public string $transaction_date = '';
 
-    #[Url(as: 'ic_summary_month', history: true)]
-    public string $inChargeSummaryMonthFilter = '';
+    public ?string $quantity = null;
 
-    public ?int $editingSaleId = null;
+    public ?string $rate = null;
 
-    public string $sale_date = '';
+    public ?string $amount = null;
 
-    public ?string $sale_quantity = null;
+    public string $description = '';
 
-    public ?string $sale_rate = null;
+    public ?string $remarks = null;
 
-    public ?int $egg_buyer_id = null;
-
-    public string $payment_status = 'cash';
-
-    public ?int $egg_in_charge_id = null;
-
-    public ?string $sale_remarks = null;
-
-    public ?int $confirmingDeleteSaleId = null;
-
-    public ?int $payingBuyerId = null;
-
-    public ?string $buyerPayAmount = null;
-
-    public string $buyerPayDate = '';
-
-    public ?string $buyerPayRemarks = null;
-
-    public ?int $confirmingDeleteBuyerPaymentId = null;
-
-    /** Revealed by "+ New Buyer" inside the sale form, instead of a nested modal. */
-    public bool $showNewBuyerFields = false;
-
-    public ?string $new_buyer_name = null;
-
-    public ?string $new_buyer_phone = null;
-
-    /** Revealed by "Edit" next to the buyer dropdown, same inline pattern as "+ New". */
-    public bool $showEditBuyerFields = false;
-
-    public ?string $edit_buyer_name = null;
-
-    public ?string $edit_buyer_phone = null;
-
-    /** Revealed by "+ New" inside the sale form, next to the In-Charge dropdown. */
-    public bool $showNewInChargeFields = false;
-
-    public ?string $new_in_charge_name = null;
-
-    public ?string $new_in_charge_phone = null;
-
-    /** Revealed by "Edit" next to the In-Charge dropdown, same inline pattern as Buyer. */
-    public bool $showEditInChargeFields = false;
-
-    public ?string $edit_in_charge_name = null;
-
-    public ?string $edit_in_charge_phone = null;
-
-    public ?int $transactingInChargeId = null;
-
-    public string $transactionType = 'expense';
-
-    public ?string $transactionAmount = null;
-
-    public string $transactionDate = '';
-
-    public ?string $transactionDescription = null;
-
-    public ?string $transactionRemarks = null;
-
-    public ?int $confirmingDeleteInChargeTransactionId = null;
+    public ?int $confirmingDeleteId = null;
 
     /**
-     * Captured once in mount() — a manually-built LengthAwarePaginator needs
-     * an explicit 'path', and request()->url() would otherwise resolve to
-     * Livewire's own update endpoint on any re-render triggered by a filter
-     * change, not this page's real URL.
+     * Captured once in mount() — request()->url() would otherwise resolve to
+     * Livewire's own update endpoint during an AJAX re-render, not this
+     * page's real URL.
      */
     public string $paginationPath = '';
 
     public function mount(): void
     {
         $this->paginationPath = request()->url();
-
-        if ($this->saleYearFilter === '' && $this->saleRangeFilter === '') {
-            $this->saleYearFilter = (string) now()->year;
-            $this->saleMonthFilter = (string) now()->month;
-        }
-
-        if ($this->summaryYearFilter === '') {
-            $this->summaryYearFilter = (string) now()->year;
-            $this->summaryMonthFilter = (string) now()->month;
-        }
-
-        if ($this->inChargeSummaryYearFilter === '') {
-            $this->inChargeSummaryYearFilter = (string) now()->year;
-            $this->inChargeSummaryMonthFilter = (string) now()->month;
-        }
     }
 
-    public function switchView(string $view): void
+    public function updatingYearFilter(): void
     {
-        $this->activeView = $view;
+        // A month only makes sense within a chosen year — and the date scope
+        // is one of quick range / year-month / custom from-to, never a mix
+        // of them, so picking one clears the others.
+        $this->monthFilter = '';
+        $this->rangeFilter = '';
+        $this->dateFrom = '';
+        $this->dateTo = '';
+        $this->resetPage();
     }
 
-    public function updatingSaleYearFilter(): void
+    public function updatingMonthFilter(): void
     {
-        $this->saleMonthFilter = '';
-        $this->saleRangeFilter = '';
-        $this->resetPage('salesPage');
+        $this->resetPage();
     }
 
-    public function updatingSaleMonthFilter(): void
+    public function updatingRangeFilter(): void
     {
-        $this->resetPage('salesPage');
+        $this->yearFilter = '';
+        $this->monthFilter = '';
+        $this->dateFrom = '';
+        $this->dateTo = '';
+        $this->resetPage();
     }
 
-    public function updatingSaleRangeFilter(): void
+    public function updatingDateFrom(): void
     {
-        $this->saleYearFilter = '';
-        $this->saleMonthFilter = '';
-        $this->resetPage('salesPage');
+        $this->yearFilter = '';
+        $this->monthFilter = '';
+        $this->rangeFilter = '';
+        $this->resetPage();
     }
 
-    public function updatingSaleBuyerFilter(): void
+    public function updatingDateTo(): void
     {
-        $this->resetPage('salesPage');
+        $this->yearFilter = '';
+        $this->monthFilter = '';
+        $this->rangeFilter = '';
+        $this->resetPage();
     }
 
-    public function updatingSaleInChargeFilter(): void
+    public function updatingTypeFilter(): void
     {
-        $this->resetPage('salesPage');
+        $this->resetPage();
     }
 
-    public function updatingSummaryYearFilter(): void
+    public function updatingSearch(): void
     {
-        $this->summaryMonthFilter = '';
+        $this->resetPage();
     }
 
-    public function updatingInChargeSummaryYearFilter(): void
+    public function clearFilters(): void
     {
-        $this->inChargeSummaryMonthFilter = '';
+        $this->reset(['typeFilter', 'search', 'rangeFilter', 'dateFrom', 'dateTo', 'yearFilter', 'monthFilter']);
+        $this->resetPage();
     }
 
     /**
-     * Every #[Url]-bound property this component has, appended onto both
-     * paginators' page links — without this, clicking "Next" (a plain
-     * <a href>, not a wire:click) does a full page reload to a URL holding
-     * only the page number, silently dropping the active tab and every
-     * other filter back to their defaults.
+     * Every filter combined (AND) — the ledger list and its period totals
+     * both read from this, so they can never disagree about what's in view.
      *
-     * @return array<string, string>
+     * @return Builder<EggSaleTransaction>
      */
-    private function urlQueryState(): array
+    private function filteredQuery(): Builder
     {
-        return array_filter([
-            'view' => $this->activeView,
-            'year' => $this->saleYearFilter,
-            'month' => $this->saleMonthFilter,
-            'range' => $this->saleRangeFilter,
-            'buyer' => $this->saleBuyerFilter,
-            'in_charge' => $this->saleInChargeFilter,
-            'summary_year' => $this->summaryYearFilter,
-            'summary_month' => $this->summaryMonthFilter,
-            'ic_summary_year' => $this->inChargeSummaryYearFilter,
-            'ic_summary_month' => $this->inChargeSummaryMonthFilter,
-        ], fn ($value) => $value !== '');
-    }
+        $from = $this->validDate($this->dateFrom);
+        $to = $this->validDate($this->dateTo);
+        $term = trim($this->search);
 
-    public function startCreateSale(): void
-    {
-        $this->editingSaleId = null;
-        $this->sale_date = now()->toDateString();
-        $this->sale_quantity = null;
-        $this->sale_rate = null;
-        $this->egg_buyer_id = null;
-        $this->payment_status = 'cash';
-        $this->egg_in_charge_id = null;
-        $this->sale_remarks = null;
-        $this->showNewBuyerFields = false;
-        $this->new_buyer_name = null;
-        $this->new_buyer_phone = null;
-        $this->showEditBuyerFields = false;
-        $this->edit_buyer_name = null;
-        $this->edit_buyer_phone = null;
-        $this->showNewInChargeFields = false;
-        $this->new_in_charge_name = null;
-        $this->new_in_charge_phone = null;
-        $this->showEditInChargeFields = false;
-        $this->edit_in_charge_name = null;
-        $this->edit_in_charge_phone = null;
-        $this->resetErrorBag();
-        $this->dispatch('open-modal', 'egg-sale-form');
-    }
-
-    public function startEditSale(int $saleId): void
-    {
-        $sale = EggSale::findOrFail($saleId);
-        $this->editingSaleId = $sale->id;
-        $this->sale_date = $sale->sale_date->format('Y-m-d');
-        $this->sale_quantity = (string) $sale->quantity;
-        $this->sale_rate = (string) $sale->sale_rate;
-        $this->egg_buyer_id = $sale->egg_buyer_id;
-        // Editing only ever offers Cash/Due — "Paid" is a legacy status from
-        // before per-sale marking was removed in favor of the Bill payment
-        // system, so an old paid sale still shows as Due here rather than
-        // silently defaulting back to Cash.
-        $this->payment_status = $sale->payment_status === 'paid' ? 'due' : $sale->payment_status;
-        $this->egg_in_charge_id = $sale->egg_in_charge_id;
-        $this->sale_remarks = $sale->remarks;
-        $this->showNewBuyerFields = false;
-        $this->new_buyer_name = null;
-        $this->new_buyer_phone = null;
-        $this->showEditBuyerFields = false;
-        $this->edit_buyer_name = null;
-        $this->edit_buyer_phone = null;
-        $this->showNewInChargeFields = false;
-        $this->new_in_charge_name = null;
-        $this->new_in_charge_phone = null;
-        $this->showEditInChargeFields = false;
-        $this->edit_in_charge_name = null;
-        $this->edit_in_charge_phone = null;
-        $this->resetErrorBag();
-        $this->dispatch('open-modal', 'egg-sale-form');
+        return EggSaleTransaction::query()
+            ->when(in_array($this->typeFilter, [EggSaleTransaction::TYPE_RECEIVED, EggSaleTransaction::TYPE_SOLD, EggSaleTransaction::TYPE_PAYMENT], true), fn ($q) => $q->where('type', $this->typeFilter))
+            ->when($term !== '', fn ($q) => $q->where(fn ($s) => $s
+                ->where('description', 'like', "%{$term}%")
+                ->orWhere('remarks', 'like', "%{$term}%")))
+            ->when(ctype_digit($this->rangeFilter) && (int) $this->rangeFilter > 0, fn ($q) => $q->whereDate('transaction_date', '>=', now()->subDays((int) $this->rangeFilter - 1)->toDateString()))
+            ->when($this->yearFilter, fn ($q) => $q->whereYear('transaction_date', $this->yearFilter))
+            ->when($this->monthFilter, fn ($q) => $q->whereMonth('transaction_date', $this->monthFilter))
+            ->when($from, fn ($q) => $q->whereDate('transaction_date', '>=', $from))
+            ->when($to, fn ($q) => $q->whereDate('transaction_date', '<=', $to));
     }
 
     /**
-     * Creates the buyer right from the sale form instead of a separate
-     * nested modal — the office almost always meets a new buyer while
-     * recording their first sale, not ahead of time.
+     * The date filters come straight from the URL (?from=…), so anything
+     * that isn't a real Y-m-d date is ignored rather than trusted.
      */
-    public function addBuyerInline(): void
+    private function validDate(string $value): ?string
     {
-        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
-
-        $validated = $this->validate([
-            'new_buyer_name' => ['required', 'string', 'max:255', Rule::unique('egg_buyers', 'name')],
-            'new_buyer_phone' => ['nullable', 'string', 'max:255'],
-        ]);
-
-        $buyer = EggBuyer::create([
-            'name' => trim($validated['new_buyer_name']),
-            'phone' => $validated['new_buyer_phone'] ? trim($validated['new_buyer_phone']) : null,
-            'created_by' => auth()->id(),
-        ]);
-
-        $this->egg_buyer_id = $buyer->id;
-        $this->showNewBuyerFields = false;
-        $this->new_buyer_name = null;
-        $this->new_buyer_phone = null;
-    }
-
-    /**
-     * Renames the currently-selected buyer in place — fixes a typo or a
-     * name that's changed, right from the sale form, without needing a
-     * separate page just for buyer management.
-     */
-    public function startEditBuyerInline(): void
-    {
-        if (! $this->egg_buyer_id) {
-            return;
+        if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+            return null;
         }
 
-        $buyer = EggBuyer::find($this->egg_buyer_id);
-        $this->edit_buyer_name = $buyer?->name;
-        $this->edit_buyer_phone = $buyer?->phone;
-        $this->showEditBuyerFields = true;
-    }
-
-    public function saveBuyerInline(): void
-    {
-        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
-
-        $validated = $this->validate([
-            'edit_buyer_name' => ['required', 'string', 'max:255', Rule::unique('egg_buyers', 'name')->ignore($this->egg_buyer_id)],
-            'edit_buyer_phone' => ['nullable', 'string', 'max:255'],
-        ]);
-
-        EggBuyer::whereKey($this->egg_buyer_id)->update([
-            'name' => trim($validated['edit_buyer_name']),
-            'phone' => $validated['edit_buyer_phone'] ? trim($validated['edit_buyer_phone']) : null,
-        ]);
-
-        $this->showEditBuyerFields = false;
-        $this->edit_buyer_name = null;
-        $this->edit_buyer_phone = null;
-    }
-
-    /**
-     * Creates an In-Charge person right from the sale form — same inline
-     * pattern as "+ New Buyer" above, for the same reason: the office
-     * usually only thinks to add someone while recording their first sale.
-     */
-    public function addInChargeInline(): void
-    {
-        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
-
-        $validated = $this->validate([
-            'new_in_charge_name' => ['required', 'string', 'max:255', Rule::unique('egg_in_charges', 'name')],
-            'new_in_charge_phone' => ['nullable', 'string', 'max:255'],
-        ]);
-
-        $inCharge = EggInCharge::create([
-            'name' => trim($validated['new_in_charge_name']),
-            'phone' => $validated['new_in_charge_phone'] ? trim($validated['new_in_charge_phone']) : null,
-            'created_by' => auth()->id(),
-        ]);
-
-        $this->egg_in_charge_id = $inCharge->id;
-        $this->showNewInChargeFields = false;
-        $this->new_in_charge_name = null;
-        $this->new_in_charge_phone = null;
-    }
-
-    public function startEditInChargeInline(): void
-    {
-        if (! $this->egg_in_charge_id) {
-            return;
+        try {
+            return Carbon::createFromFormat('Y-m-d', $value)->toDateString() === $value ? $value : null;
+        } catch (Throwable) {
+            return null;
         }
-
-        $inCharge = EggInCharge::find($this->egg_in_charge_id);
-        $this->edit_in_charge_name = $inCharge?->name;
-        $this->edit_in_charge_phone = $inCharge?->phone;
-        $this->showEditInChargeFields = true;
     }
 
-    public function saveInChargeInline(): void
+    private function hasActiveFilters(): bool
     {
-        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
-
-        $validated = $this->validate([
-            'edit_in_charge_name' => ['required', 'string', 'max:255', Rule::unique('egg_in_charges', 'name')->ignore($this->egg_in_charge_id)],
-            'edit_in_charge_phone' => ['nullable', 'string', 'max:255'],
-        ]);
-
-        EggInCharge::whereKey($this->egg_in_charge_id)->update([
-            'name' => trim($validated['edit_in_charge_name']),
-            'phone' => $validated['edit_in_charge_phone'] ? trim($validated['edit_in_charge_phone']) : null,
-        ]);
-
-        $this->showEditInChargeFields = false;
-        $this->edit_in_charge_name = null;
-        $this->edit_in_charge_phone = null;
+        return $this->typeFilter !== '' || trim($this->search) !== ''
+            || $this->rangeFilter !== '' || $this->dateFrom !== '' || $this->dateTo !== ''
+            || $this->yearFilter !== '' || $this->monthFilter !== '';
     }
 
-    public function saveSale(): void
+    private function scopeLabel(Collection $monthOptions): string
     {
-        Gate::authorize($this->editingSaleId ? 'egg_sales.modify' : 'egg_sales.create');
+        return match (true) {
+            $this->rangeFilter === '1' => 'today',
+            $this->rangeFilter !== '' => "last {$this->rangeFilter} days",
+            $this->validDate($this->dateFrom) || $this->validDate($this->dateTo) => (
+                ($this->validDate($this->dateFrom) ? Carbon::parse($this->dateFrom)->format('d M Y') : 'start').' – '
+                .($this->validDate($this->dateTo) ? Carbon::parse($this->dateTo)->format('d M Y') : 'today')
+            ),
+            $this->yearFilter !== '' && $this->monthFilter !== '' => $monthOptions[$this->monthFilter].' '.$this->yearFilter,
+            $this->yearFilter !== '' => $this->yearFilter,
+            default => 'all-time',
+        };
+    }
+
+    public function startReceived(): void
+    {
+        $this->startCreate(EggSaleTransaction::TYPE_RECEIVED);
+    }
+
+    public function startSold(): void
+    {
+        $this->startCreate(EggSaleTransaction::TYPE_SOLD);
+    }
+
+    public function startPayment(): void
+    {
+        $this->startCreate(EggSaleTransaction::TYPE_PAYMENT);
+    }
+
+    private function startCreate(string $type): void
+    {
+        $this->editingId = null;
+        $this->type = $type;
+        $this->transaction_date = now()->toDateString();
+        $this->quantity = null;
+        $this->rate = null;
+        $this->amount = null;
+        $this->description = '';
+        $this->remarks = null;
+        $this->resetErrorBag();
+        $this->dispatch('open-modal', 'egg-sale-transaction-form');
+    }
+
+    public function startEdit(int $transactionId): void
+    {
+        $transaction = EggSaleTransaction::findOrFail($transactionId);
+        $this->editingId = $transaction->id;
+        $this->type = $transaction->type;
+        $this->transaction_date = $transaction->transaction_date->format('Y-m-d');
+        $this->quantity = (string) $transaction->quantity;
+        $this->rate = $transaction->rate !== null ? (string) $transaction->rate : null;
+        $this->amount = $transaction->amount !== null ? (string) $transaction->amount : null;
+        $this->description = $transaction->description;
+        $this->remarks = $transaction->remarks;
+        $this->resetErrorBag();
+        $this->dispatch('open-modal', 'egg-sale-transaction-form');
+    }
+
+    public function save(): void
+    {
+        Gate::authorize($this->editingId ? 'egg_sales.modify' : 'egg_sales.create');
+
+        $isSold = $this->type === EggSaleTransaction::TYPE_SOLD;
+        $isPayment = $this->type === EggSaleTransaction::TYPE_PAYMENT;
 
         $validated = $this->validate([
-            'sale_date' => ['required', 'date'],
-            'sale_quantity' => ['required', 'numeric', 'min:0.01'],
-            'sale_rate' => ['required', 'numeric', 'min:0'],
-            'egg_buyer_id' => ['nullable', 'integer', 'exists:egg_buyers,id'],
-            'payment_status' => ['required', Rule::in(['cash', 'due'])],
-            'egg_in_charge_id' => ['nullable', 'integer', 'exists:egg_in_charges,id'],
-            'sale_remarks' => ['nullable', 'string', 'max:2000'],
-        ], [], [
-            'sale_quantity' => 'quantity',
-            'sale_rate' => 'sale rate',
+            'type' => ['required', Rule::in([EggSaleTransaction::TYPE_RECEIVED, EggSaleTransaction::TYPE_SOLD, EggSaleTransaction::TYPE_PAYMENT])],
+            'transaction_date' => ['required', 'date'],
+            // A payment is pure cash from Akter, no eggs move — everything
+            // else is a stock movement and needs a quantity.
+            'quantity' => [Rule::requiredIf(! $isPayment), 'nullable', 'numeric', 'min:0.01'],
+            // Rate is always required for a sale (what it earned) and
+            // optional for a received entry (what it cost to hand to
+            // Akter, if known yet) — either way the amount is derived from
+            // quantity × rate, never entered directly. A payment has no
+            // rate at all; its amount is the only one Akter actually tells
+            // us, entered directly since it's a lump sum covering whatever
+            // he's settling, not tied to one sale's quantity.
+            'rate' => [Rule::requiredIf($isSold), 'nullable', 'numeric', 'min:0.01'],
+            'amount' => [Rule::requiredIf($isPayment), 'nullable', 'numeric', 'min:0.01'],
+            // Who it was sold to is always required; received/payment notes
+            // are optional and default below.
+            'description' => [Rule::requiredIf($isSold), 'nullable', 'string', 'max:255'],
+            'remarks' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        $attributes = [
-            'sale_date' => $validated['sale_date'],
-            'quantity' => $validated['sale_quantity'],
-            'sale_rate' => $validated['sale_rate'],
-            'sale_amount' => round((float) $validated['sale_quantity'] * (float) $validated['sale_rate'], 2),
-            'egg_buyer_id' => $validated['egg_buyer_id'],
-            'payment_status' => $validated['payment_status'],
-            'egg_in_charge_id' => $validated['egg_in_charge_id'],
-            'remarks' => $validated['sale_remarks'] ? trim($validated['sale_remarks']) : null,
-        ];
+        $validated['quantity'] = $isPayment ? 0 : $validated['quantity'];
+        $validated['rate'] = $isPayment ? null : $validated['rate'];
+        $validated['amount'] = match (true) {
+            $isPayment => $validated['amount'],
+            $validated['rate'] !== null => round((float) $validated['quantity'] * (float) $validated['rate'], 2),
+            default => null,
+        };
+        $validated['description'] = trim((string) $validated['description']) ?: ($isPayment ? 'Payment' : 'Received');
+        $validated['remarks'] = $validated['remarks'] ? trim($validated['remarks']) : null;
 
-        if ($this->editingSaleId) {
-            EggSale::whereKey($this->editingSaleId)->update($attributes);
+        if ($this->editingId) {
+            EggSaleTransaction::whereKey($this->editingId)->update($validated);
         } else {
-            $attributes['created_by'] = auth()->id();
-            EggSale::create($attributes);
+            $validated['created_by'] = auth()->id();
+            EggSaleTransaction::create($validated);
         }
 
-        $this->dispatch('close-modal', 'egg-sale-form');
-        session()->flash('status', $this->editingSaleId ? 'Sale updated.' : 'Sale recorded.');
+        $this->dispatch('close-modal', 'egg-sale-transaction-form');
+        $this->notify($this->editingId ? 'Entry updated.' : match (true) {
+            $isSold => 'Sale recorded.',
+            $isPayment => 'Payment recorded.',
+            default => 'Received entry recorded.',
+        });
     }
 
-    public function confirmDeleteSale(int $saleId): void
+    public function confirmDelete(int $transactionId): void
     {
-        $this->confirmingDeleteSaleId = $saleId;
-        $this->dispatch('open-modal', 'confirm-egg-sale-deletion');
+        $this->confirmingDeleteId = $transactionId;
+        $this->dispatch('open-modal', 'confirm-egg-sale-transaction-deletion');
     }
 
-    public function deleteSale(): void
+    public function delete(): void
     {
         Gate::authorize('egg_sales.modify');
 
-        if ($this->confirmingDeleteSaleId) {
-            EggSale::whereKey($this->confirmingDeleteSaleId)->delete();
+        if ($this->confirmingDeleteId) {
+            EggSaleTransaction::destroy($this->confirmingDeleteId);
         }
 
-        $this->confirmingDeleteSaleId = null;
-        $this->dispatch('close-modal', 'confirm-egg-sale-deletion');
-        session()->flash('status', 'Sale deleted.');
+        $this->confirmingDeleteId = null;
+        $this->dispatch('close-modal', 'confirm-egg-sale-transaction-deletion');
+        $this->notify('Entry deleted.');
     }
 
     /**
-     * Opens the payment form for one buyer, pre-filled with whatever they
-     * currently owe overall (not scoped to the period being viewed — a
-     * buyer's real debt doesn't reset each month) so settling in full is a
-     * one-field confirm, same UX as Company Purchases' "Pay Cash" and
-     * Invoices' "Record Payment".
+     * Sends the confirmation straight to the browser's toast stack in this
+     * same response, rather than through the session flash the layout polls
+     * for — a flash can be lost when another request from the same session
+     * (the toast poll itself) overlaps the save, so the alert never showed.
      */
-    public function startRecordBuyerPayment(int $eggBuyerId): void
+    private function notify(string $message, string $type = 'success'): void
     {
-        $buyer = EggBuyer::findOrFail($eggBuyerId);
-        $this->payingBuyerId = $buyer->id;
-        $outstanding = $buyer->outstandingDue;
-        $this->buyerPayAmount = $outstanding > 0 ? rtrim(rtrim(number_format($outstanding, 2, '.', ''), '0'), '.') : '';
-        $this->buyerPayDate = now()->toDateString();
-        $this->buyerPayRemarks = null;
-        $this->resetErrorBag();
-        $this->dispatch('open-modal', 'egg-buyer-payment-form');
-    }
-
-    /**
-     * Records cash actually received from a buyer against their running
-     * balance — usable repeatedly, so a buyer who only ever pays part of
-     * what they owe can still be tracked accurately over time.
-     */
-    public function recordBuyerPayment(): void
-    {
-        Gate::authorize('egg_sales.modify');
-
-        $buyer = EggBuyer::findOrFail($this->payingBuyerId);
-
-        $validated = $this->validate([
-            'buyerPayAmount' => [
-                'required', 'numeric', 'min:0.01',
-                function (string $attribute, $value, $fail) use ($buyer): void {
-                    if ((float) $value > $buyer->outstandingDue + 0.01) {
-                        $fail('This buyer only owes '.number_format($buyer->outstandingDue, 2).' right now.');
-                    }
-                },
-            ],
-            'buyerPayDate' => ['required', 'date'],
-            'buyerPayRemarks' => ['nullable', 'string', 'max:2000'],
-        ]);
-
-        EggBuyerPayment::create([
-            'egg_buyer_id' => $buyer->id,
-            'amount' => (float) $validated['buyerPayAmount'],
-            'paid_on' => $validated['buyerPayDate'],
-            'remarks' => $validated['buyerPayRemarks'] ? trim($validated['buyerPayRemarks']) : null,
-            'created_by' => auth()->id(),
-        ]);
-
-        $this->buyerPayAmount = null;
-        $this->buyerPayRemarks = null;
-        $this->dispatch('close-modal', 'egg-buyer-payment-form');
-        session()->flash('status', 'Payment recorded.');
-    }
-
-    public function confirmDeleteBuyerPayment(int $paymentId): void
-    {
-        $this->confirmingDeleteBuyerPaymentId = $paymentId;
-        // Closes the payment form first — a confirm dialog opening on top of
-        // an already-open modal isn't a pattern used anywhere else in this
-        // app, so this keeps only one modal ever visible at a time.
-        $this->dispatch('close-modal', 'egg-buyer-payment-form');
-        $this->dispatch('open-modal', 'confirm-egg-buyer-payment-deletion');
-    }
-
-    public function deleteBuyerPayment(): void
-    {
-        Gate::authorize('egg_sales.modify');
-
-        if ($this->confirmingDeleteBuyerPaymentId) {
-            EggBuyerPayment::whereKey($this->confirmingDeleteBuyerPaymentId)->delete();
-        }
-
-        $this->confirmingDeleteBuyerPaymentId = null;
-        $this->dispatch('close-modal', 'confirm-egg-buyer-payment-deletion');
-        session()->flash('status', 'Payment removed.');
-    }
-
-    /**
-     * Jumps to the Sales tab filtered to exactly this buyer and period —
-     * the itemized data behind one Buyer Summary row, one click away.
-     */
-    public function viewBuyerSales(int $eggBuyerId): void
-    {
-        $this->saleBuyerFilter = (string) $eggBuyerId;
-        $this->saleYearFilter = $this->summaryYearFilter;
-        $this->saleMonthFilter = $this->summaryMonthFilter;
-        $this->saleRangeFilter = '';
-        $this->activeView = 'sales';
-    }
-
-    /**
-     * Opens the transaction form for one In-Charge person — not pre-filled
-     * with an amount, unlike "Record Payment" above, since this logs a new
-     * expense/remittance event rather than settling one known figure.
-     */
-    public function startRecordInChargeTransaction(int $eggInChargeId): void
-    {
-        $this->transactingInChargeId = $eggInChargeId;
-        $this->transactionType = 'expense';
-        $this->transactionAmount = null;
-        $this->transactionDate = now()->toDateString();
-        $this->transactionDescription = null;
-        $this->transactionRemarks = null;
-        $this->resetErrorBag();
-        $this->dispatch('open-modal', 'egg-in-charge-transaction-form');
-    }
-
-    /**
-     * Records money an In-Charge person spent on something else ('expense')
-     * or cash they've actually handed back to the office ('remittance') —
-     * either way it reduces what they owe. No cap against what they
-     * currently owe (unlike a buyer payment) — the same "can go negative"
-     * philosophy as the Sajjat wallet ledger, since a real-world expense
-     * can legitimately be recorded before all of today's cash sales are
-     * entered.
-     */
-    public function recordInChargeTransaction(): void
-    {
-        Gate::authorize('egg_sales.modify');
-
-        $validated = $this->validate([
-            'transactionType' => ['required', Rule::in([EggInChargeTransaction::TYPE_EXPENSE, EggInChargeTransaction::TYPE_REMITTANCE])],
-            'transactionAmount' => ['required', 'numeric', 'min:0.01'],
-            'transactionDate' => ['required', 'date'],
-            'transactionDescription' => ['required', 'string', 'max:255'],
-            'transactionRemarks' => ['nullable', 'string', 'max:2000'],
-        ]);
-
-        EggInChargeTransaction::create([
-            'egg_in_charge_id' => $this->transactingInChargeId,
-            'type' => $validated['transactionType'],
-            'transaction_date' => $validated['transactionDate'],
-            'amount' => (float) $validated['transactionAmount'],
-            'description' => trim($validated['transactionDescription']),
-            'remarks' => $validated['transactionRemarks'] ? trim($validated['transactionRemarks']) : null,
-            'created_by' => auth()->id(),
-        ]);
-
-        $this->transactionAmount = null;
-        $this->transactionDescription = null;
-        $this->transactionRemarks = null;
-        $this->dispatch('close-modal', 'egg-in-charge-transaction-form');
-        session()->flash('status', $validated['transactionType'] === EggInChargeTransaction::TYPE_EXPENSE ? 'Expense recorded.' : 'Remittance recorded.');
-    }
-
-    public function confirmDeleteInChargeTransaction(int $transactionId): void
-    {
-        $this->confirmingDeleteInChargeTransactionId = $transactionId;
-        $this->dispatch('close-modal', 'egg-in-charge-transaction-form');
-        $this->dispatch('open-modal', 'confirm-egg-in-charge-transaction-deletion');
-    }
-
-    public function deleteInChargeTransaction(): void
-    {
-        Gate::authorize('egg_sales.modify');
-
-        if ($this->confirmingDeleteInChargeTransactionId) {
-            EggInChargeTransaction::whereKey($this->confirmingDeleteInChargeTransactionId)->delete();
-        }
-
-        $this->confirmingDeleteInChargeTransactionId = null;
-        $this->dispatch('close-modal', 'confirm-egg-in-charge-transaction-deletion');
-        session()->flash('status', 'Transaction removed.');
-    }
-
-    /**
-     * Jumps to the Sales tab filtered to exactly this In-Charge person and
-     * period — the itemized cash sales behind one ledger row, one click
-     * away, same pattern as "View" on the Buyer Summary.
-     */
-    public function viewInChargeSales(int $eggInChargeId): void
-    {
-        $this->saleInChargeFilter = (string) $eggInChargeId;
-        $this->saleYearFilter = $this->inChargeSummaryYearFilter;
-        $this->saleMonthFilter = $this->inChargeSummaryMonthFilter;
-        $this->saleRangeFilter = '';
-        $this->activeView = 'sales';
+        $this->dispatch('toast', message: $message, type: $type);
     }
 
     public function with(): array
     {
+        $availableYears = EggSaleTransaction::pluck('transaction_date')
+            ->map(fn ($date) => $date->year)
+            ->unique()
+            ->sortDesc()
+            ->values();
+
         $monthOptions = collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]);
 
+        $query = $this->filteredQuery();
+
+        // Cloned before pagination so the period totals cover every filtered
+        // row, not just the current page.
+        $receivedInView = (float) (clone $query)->where('type', EggSaleTransaction::TYPE_RECEIVED)->sum('quantity');
+        $soldInView = (float) (clone $query)->where('type', EggSaleTransaction::TYPE_SOLD)->sum('quantity');
+        $revenueInView = (float) (clone $query)->where('type', EggSaleTransaction::TYPE_SOLD)->sum('amount');
+        $paidInView = (float) (clone $query)->where('type', EggSaleTransaction::TYPE_PAYMENT)->sum('amount');
+
         return [
-            'buyers' => EggBuyer::orderBy('name')->get(),
-            'inCharges' => EggInCharge::orderBy('name')->get(),
-            'saleAmountPreview' => (is_numeric($this->sale_quantity) && is_numeric($this->sale_rate))
-                ? round((float) $this->sale_quantity * (float) $this->sale_rate, 2)
+            'transactions' => $query->orderByDesc('transaction_date')->orderByDesc('id')->simplePaginate(30)
+                ->setPath($this->paginationPath)
+                ->appends(array_filter([
+                    'year' => $this->yearFilter,
+                    'month' => $this->monthFilter,
+                    'type' => $this->typeFilter,
+                    'q' => trim($this->search),
+                    'range' => $this->rangeFilter,
+                    'from' => $this->dateFrom,
+                    'to' => $this->dateTo,
+                ])),
+            'scopeLabel' => $this->scopeLabel($monthOptions),
+            'hasActiveFilters' => $this->hasActiveFilters(),
+            'availableYears' => $availableYears,
+            'monthOptions' => $monthOptions,
+            // Always all-time — how many eggs are on hand right now, how
+            // much has ever been earned, how much Akter has paid in, and
+            // what he still owes, none of which depend on which month is
+            // being looked at.
+            'quantityBalance' => EggSaleTransaction::quantityBalance(),
+            'totalRevenue' => EggSaleTransaction::totalRevenue(),
+            'totalPaidIn' => EggSaleTransaction::totalPaidIn(),
+            'outstandingDue' => EggSaleTransaction::outstandingDue(),
+            'receivedInView' => $receivedInView,
+            'soldInView' => $soldInView,
+            'revenueInView' => $revenueInView,
+            'paidInView' => $paidInView,
+            'amountPreview' => (is_numeric($this->quantity) && is_numeric($this->rate))
+                ? round((float) $this->quantity * (float) $this->rate, 2)
                 : null,
-            ...$this->salesReport($monthOptions),
-            ...$this->buyerSalesSummary($monthOptions),
-            ...$this->inChargeSalesSummary($monthOptions),
-            'payingBuyer' => $this->payingBuyerId
-                ? EggBuyer::with(['payments' => fn ($query) => $query->orderByDesc('paid_on')->orderByDesc('id')])->find($this->payingBuyerId)
-                : null,
-            'transactingInCharge' => $this->transactingInChargeId
-                ? EggInCharge::with(['transactions' => fn ($query) => $query->orderByDesc('transaction_date')->orderByDesc('id')])->find($this->transactingInChargeId)
-                : null,
+            ...$this->soldSummary(),
         ];
     }
 
     /**
-     * @param  Collection<int, string>  $monthOptions
-     * @return array{sales: LengthAwarePaginator, saleAvailableYears: Collection<int, int>, saleMonthOptions: Collection<int, string>}
-     */
-    private function salesReport(Collection $monthOptions): array
-    {
-        $saleAvailableYears = EggSale::pluck('sale_date')
-            ->map(fn ($date) => $date->year)
-            ->unique()
-            ->sortDesc()
-            ->values();
-
-        $sales = EggSale::with(['buyer', 'inCharge'])
-            ->when($this->saleRangeFilter, fn ($query) => $query->whereDate('sale_date', '>=', now()->subDays((int) $this->saleRangeFilter - 1)->startOfDay()->toDateString()))
-            ->when($this->saleYearFilter, fn ($query) => $query->whereYear('sale_date', $this->saleYearFilter))
-            ->when($this->saleMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->saleMonthFilter))
-            ->when($this->saleBuyerFilter, fn ($query) => $query->where('egg_buyer_id', $this->saleBuyerFilter))
-            ->when($this->saleInChargeFilter, fn ($query) => $query->where('egg_in_charge_id', $this->saleInChargeFilter))
-            ->orderByDesc('sale_date')
-            ->orderByDesc('id')
-            ->simplePaginate(self::SALES_PER_PAGE, ['*'], 'salesPage')
-            ->setPath($this->paginationPath)
-            ->appends($this->urlQueryState());
-
-        return [
-            'sales' => $sales,
-            'saleAvailableYears' => $saleAvailableYears,
-            'saleMonthOptions' => $monthOptions,
-        ];
-    }
-
-    /**
-     * The complete cash/due picture: who eggs were sold to, how much of
-     * that is cash-in-hand versus still owed, grouped by buyer within
-     * whatever Year/Month is selected — this is the real monthly data the
-     * office hands to (or chases) a buyer with, no separate bill document
-     * needed. Grouped by buyer id (not name) so "View" and "Record Payment"
-     * below can target the right buyer even if two ever share a name.
+     * How much Mr. Akter has sold this week and this month — always these
+     * two fixed windows, independent of whatever the filters above are
+     * currently narrowed to, so the headline numbers are visible at a
+     * glance without having to set up a filter first.
      *
-     * @param  Collection<int, string>  $monthOptions
-     * @return array{buyerSummaries: Collection<int, object>, summaryAvailableYears: Collection<int, int>, summaryMonthOptions: Collection<int, string>}
+     * @return array{weekSoldQuantity: float, weekSoldRevenue: float, monthSoldQuantity: float, monthSoldRevenue: float}
      */
-    private function buyerSalesSummary(Collection $monthOptions): array
+    private function soldSummary(): array
     {
-        $summaryAvailableYears = EggSale::pluck('sale_date')
-            ->map(fn ($date) => $date->year)
-            ->unique()
-            ->sortDesc()
-            ->values();
-
-        $sales = EggSale::with('buyer')
-            ->when($this->summaryYearFilter, fn ($query) => $query->whereYear('sale_date', $this->summaryYearFilter))
-            ->when($this->summaryMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->summaryMonthFilter))
-            ->get();
-
-        // The client collects payment from buyers every month, so this is
-        // scoped to whatever Year/Month the table itself is filtered to, by
-        // the payment's own paid_on date: "how much did we actually collect
-        // from each buyer this period" — deliberately different scoping
-        // from outstandingDue below, which stays all-time on purpose.
-        $paymentsThisPeriod = EggBuyerPayment::when($this->summaryYearFilter, fn ($query) => $query->whereYear('paid_on', $this->summaryYearFilter))
-            ->when($this->summaryMonthFilter, fn ($query) => $query->whereMonth('paid_on', $this->summaryMonthFilter))
-            ->get();
-        $paymentsThisPeriodByBuyer = $paymentsThisPeriod->groupBy('egg_buyer_id')->map(fn ($payments) => (float) $payments->sum('amount'));
-
-        // A buyer's real outstanding balance spans every Due sale they've
-        // ever had minus every payment ever recorded — not just this period
-        // — so it's fetched separately, in two batched queries rather than
-        // EggBuyer::outstandingDue per row, to avoid an N+1. The buyer id
-        // list includes anyone who paid this period even without a sale
-        // this period (settling a prior month's due), so that payment is
-        // never silently missing from the table.
-        $buyerIds = $sales->pluck('egg_buyer_id')->merge($paymentsThisPeriodByBuyer->keys())->filter()->unique()->values();
-        $allTimeDueByBuyer = EggSale::where('payment_status', 'due')
-            ->whereIn('egg_buyer_id', $buyerIds)
-            ->selectRaw('egg_buyer_id, SUM(sale_amount) as total')
-            ->groupBy('egg_buyer_id')
-            ->pluck('total', 'egg_buyer_id');
-        $paymentsReceivedByBuyer = EggBuyerPayment::whereIn('egg_buyer_id', $buyerIds)
-            ->selectRaw('egg_buyer_id, SUM(amount) as total')
-            ->groupBy('egg_buyer_id')
-            ->pluck('total', 'egg_buyer_id');
-
-        $buildSummary = function (?int $buyerId, Collection $sales) use ($allTimeDueByBuyer, $paymentsReceivedByBuyer, $paymentsThisPeriodByBuyer) {
-            return (object) [
-                'buyerId' => $buyerId,
-                'buyerName' => $sales->first()?->buyer?->name ?: ($buyerId ? EggBuyer::find($buyerId)?->name : null) ?: 'Unnamed Buyer',
-                'quantity' => (float) $sales->sum('quantity'),
-                'cashAmount' => (float) $sales->where('payment_status', 'cash')->sum('sale_amount'),
-                'dueAmount' => (float) $sales->where('payment_status', 'due')->sum('sale_amount'),
-                // Legacy sales flipped Paid the old way (none in real data
-                // anymore) plus cash actually received via the payment
-                // ledger this period — the two are mutually exclusive, so
-                // summing them can't double-count.
-                'paidAmount' => (float) $sales->where('payment_status', 'paid')->sum('sale_amount')
-                    + (float) ($paymentsThisPeriodByBuyer[$buyerId] ?? 0),
-                'totalAmount' => (float) $sales->sum('sale_amount'),
-                'outstandingDue' => $buyerId
-                    ? max(0.0, (float) ($allTimeDueByBuyer[$buyerId] ?? 0) - (float) ($paymentsReceivedByBuyer[$buyerId] ?? 0))
-                    : 0.0,
-            ];
-        };
-
-        $salesByBuyer = $sales->groupBy('egg_buyer_id');
-        $buyerSummaries = $salesByBuyer->map(fn (Collection $sales, $buyerId) => $buildSummary($buyerId !== '' ? (int) $buyerId : null, $sales));
-
-        // A buyer who paid this period but has no sale at all this period
-        // (settling a prior month's balance) still needs their own row.
-        foreach ($paymentsThisPeriodByBuyer->keys()->diff($salesByBuyer->keys()) as $buyerId) {
-            $buyerSummaries->push($buildSummary($buyerId, collect()));
-        }
-
-        $buyerSummaries = $buyerSummaries->sortBy('buyerName')->values();
-
-        // A friendly label for whatever period is currently selected, so
-        // the "Received" figure never has to be read next to the filter
-        // dropdowns to know which month it's for — useful on its own in a
-        // screenshot or printout too. Null (nothing selected) shows no
-        // label at all rather than a redundant "All Time".
-        $summaryPeriodLabel = match (true) {
-            (bool) $this->summaryYearFilter && (bool) $this->summaryMonthFilter => Carbon::create((int) $this->summaryYearFilter, (int) $this->summaryMonthFilter, 1)->format('F Y'),
-            (bool) $this->summaryYearFilter => (string) $this->summaryYearFilter,
-            default => null,
-        };
+        $sold = EggSaleTransaction::where('type', EggSaleTransaction::TYPE_SOLD);
 
         return [
-            'buyerSummaries' => $buyerSummaries,
-            'summaryAvailableYears' => $summaryAvailableYears,
-            'summaryMonthOptions' => $monthOptions,
-            'summaryPeriodLabel' => $summaryPeriodLabel,
-        ];
-    }
-
-    /**
-     * Each In-Charge person's whole sales operation, not just its Cash
-     * side — an In-Charge person (e.g. Mr. Akter, the egg sales manager)
-     * owns everything under their name, Cash and Due sales alike, grouped
-     * the same way Buyer Summary groups sales — by id, within whatever
-     * Year/Month the ledger is filtered to for this period's activity,
-     * with the all-time running balance (outstandingOwed) always shown
-     * alongside it so nothing ever has to be chased down a different
-     * screen.
-     *
-     * @param  Collection<int, string>  $monthOptions
-     * @return array{inChargeSummaries: Collection<int, object>, inChargeSummaryAvailableYears: Collection<int, int>, inChargeSummaryMonthOptions: Collection<int, string>, inChargeSummaryPeriodLabel: ?string}
-     */
-    private function inChargeSalesSummary(Collection $monthOptions): array
-    {
-        $inChargeSummaryAvailableYears = EggSale::pluck('sale_date')
-            ->map(fn ($date) => $date->year)
-            ->unique()
-            ->sortDesc()
-            ->values();
-
-        $sales = EggSale::whereNotNull('egg_in_charge_id')
-            ->with('inCharge')
-            ->when($this->inChargeSummaryYearFilter, fn ($query) => $query->whereYear('sale_date', $this->inChargeSummaryYearFilter))
-            ->when($this->inChargeSummaryMonthFilter, fn ($query) => $query->whereMonth('sale_date', $this->inChargeSummaryMonthFilter))
-            ->get();
-
-        $transactionsThisPeriod = EggInChargeTransaction::when($this->inChargeSummaryYearFilter, fn ($query) => $query->whereYear('transaction_date', $this->inChargeSummaryYearFilter))
-            ->when($this->inChargeSummaryMonthFilter, fn ($query) => $query->whereMonth('transaction_date', $this->inChargeSummaryMonthFilter))
-            ->get();
-        $expensesThisPeriodByInCharge = $transactionsThisPeriod->where('type', EggInChargeTransaction::TYPE_EXPENSE)
-            ->groupBy('egg_in_charge_id')->map(fn ($t) => (float) $t->sum('amount'));
-        $remittedThisPeriodByInCharge = $transactionsThisPeriod->where('type', EggInChargeTransaction::TYPE_REMITTANCE)
-            ->groupBy('egg_in_charge_id')->map(fn ($t) => (float) $t->sum('amount'));
-
-        // Each person's real outstanding balance spans every sale and every
-        // transaction they've ever had — not just this period — so it's
-        // fetched separately, in batched queries rather than
-        // EggInCharge::outstandingOwed per row, to avoid an N+1.
-        $inChargeIds = $sales->pluck('egg_in_charge_id')->merge($transactionsThisPeriod->pluck('egg_in_charge_id'))->filter()->unique()->values();
-        $allTimeSalesByInCharge = EggSale::whereIn('egg_in_charge_id', $inChargeIds)
-            ->selectRaw('egg_in_charge_id, SUM(sale_amount) as total')
-            ->groupBy('egg_in_charge_id')
-            ->pluck('total', 'egg_in_charge_id');
-        $allTimeExpensesByInCharge = EggInChargeTransaction::where('type', EggInChargeTransaction::TYPE_EXPENSE)
-            ->whereIn('egg_in_charge_id', $inChargeIds)
-            ->selectRaw('egg_in_charge_id, SUM(amount) as total')
-            ->groupBy('egg_in_charge_id')
-            ->pluck('total', 'egg_in_charge_id');
-        $allTimeRemittedByInCharge = EggInChargeTransaction::where('type', EggInChargeTransaction::TYPE_REMITTANCE)
-            ->whereIn('egg_in_charge_id', $inChargeIds)
-            ->selectRaw('egg_in_charge_id, SUM(amount) as total')
-            ->groupBy('egg_in_charge_id')
-            ->pluck('total', 'egg_in_charge_id');
-
-        $buildSummary = function (int $inChargeId, Collection $sales) use ($expensesThisPeriodByInCharge, $remittedThisPeriodByInCharge, $allTimeSalesByInCharge, $allTimeExpensesByInCharge, $allTimeRemittedByInCharge) {
-            return (object) [
-                'inChargeId' => $inChargeId,
-                'inChargeName' => $sales->first()?->inCharge?->name ?: EggInCharge::find($inChargeId)?->name ?: 'Unknown',
-                'cashAmount' => (float) $sales->where('payment_status', 'cash')->sum('sale_amount'),
-                'dueAmount' => (float) $sales->where('payment_status', 'due')->sum('sale_amount'),
-                'totalSales' => (float) $sales->sum('sale_amount'),
-                'expenseAmount' => (float) ($expensesThisPeriodByInCharge[$inChargeId] ?? 0),
-                'remittedAmount' => (float) ($remittedThisPeriodByInCharge[$inChargeId] ?? 0),
-                'outstandingOwed' => max(0.0, (float) ($allTimeSalesByInCharge[$inChargeId] ?? 0)
-                    - (float) ($allTimeExpensesByInCharge[$inChargeId] ?? 0)
-                    - (float) ($allTimeRemittedByInCharge[$inChargeId] ?? 0)),
-            ];
-        };
-
-        $salesByInCharge = $sales->groupBy('egg_in_charge_id');
-        $inChargeSummaries = $salesByInCharge->map(fn (Collection $sales, $inChargeId) => $buildSummary((int) $inChargeId, $sales));
-
-        // Someone with a transaction this period but no sale this period
-        // (an expense recorded against a prior period's balance) still
-        // needs their own row.
-        foreach ($transactionsThisPeriod->pluck('egg_in_charge_id')->unique()->diff($salesByInCharge->keys()) as $inChargeId) {
-            $inChargeSummaries->push($buildSummary($inChargeId, collect()));
-        }
-
-        $inChargeSummaries = $inChargeSummaries->sortBy('inChargeName')->values();
-
-        $inChargeSummaryPeriodLabel = match (true) {
-            (bool) $this->inChargeSummaryYearFilter && (bool) $this->inChargeSummaryMonthFilter => Carbon::create((int) $this->inChargeSummaryYearFilter, (int) $this->inChargeSummaryMonthFilter, 1)->format('F Y'),
-            (bool) $this->inChargeSummaryYearFilter => (string) $this->inChargeSummaryYearFilter,
-            default => null,
-        };
-
-        return [
-            'inChargeSummaries' => $inChargeSummaries,
-            'inChargeSummaryAvailableYears' => $inChargeSummaryAvailableYears,
-            'inChargeSummaryMonthOptions' => $monthOptions,
-            'inChargeSummaryPeriodLabel' => $inChargeSummaryPeriodLabel,
+            'weekSoldQuantity' => (float) (clone $sold)->whereBetween('transaction_date', [now()->startOfWeek()->toDateString(), now()->endOfWeek()->toDateString()])->sum('quantity'),
+            'weekSoldRevenue' => (float) (clone $sold)->whereBetween('transaction_date', [now()->startOfWeek()->toDateString(), now()->endOfWeek()->toDateString()])->sum('amount'),
+            'monthSoldQuantity' => (float) (clone $sold)->whereYear('transaction_date', now()->year)->whereMonth('transaction_date', now()->month)->sum('quantity'),
+            'monthSoldRevenue' => (float) (clone $sold)->whereYear('transaction_date', now()->year)->whereMonth('transaction_date', now()->month)->sum('amount'),
         ];
     }
 }; ?>
@@ -889,664 +394,296 @@ new class extends Component
 <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
         <h2 class="text-base font-semibold text-slate-900 dark:text-white">Egg Sales</h2>
-        @can('egg_sales.create')
-            @if ($activeView === 'sales')
-                <x-primary-button type="button" wire:click="startCreateSale">
+        <div class="flex flex-wrap items-center gap-2">
+            @can('egg_sales.create')
+                <x-secondary-button type="button" wire:click="startReceived">
+                    + Received
+                </x-secondary-button>
+                <x-primary-button type="button" wire:click="startSold">
                     + Record Sale
                 </x-primary-button>
-            @endif
-        @endcan
+                <x-secondary-button type="button" wire:click="startPayment">
+                    + Record Payment
+                </x-secondary-button>
+            @endcan
+        </div>
     </div>
 
-    <div class="inline-flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800/60">
-        <button
-            type="button"
-            wire:click="switchView('sales')"
-            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'sales' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
-        >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M4 19V5m5 14V9m5 10V13m5 6V7" /></svg>
-            Sales
-        </button>
-        <button
-            type="button"
-            wire:click="switchView('buyer-summary')"
-            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'buyer-summary' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
-        >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 0 0-3-3.87M9 20H4v-2a4 4 0 0 1 3-3.87m6-1.13a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm6 0a4 4 0 1 0 0-8" /></svg>
-            Buyer Summary
-        </button>
-        <button
-            type="button"
-            wire:click="switchView('in-charge')"
-            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition {{ $activeView === 'in-charge' ? 'bg-white text-brand-700 shadow-sm dark:bg-slate-700 dark:text-brand-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
-        >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="h-4 w-4"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v8m-4-4h8M12 3v2m0 14v2m9-9h-2M5 12H3" /><circle cx="12" cy="12" r="9" /></svg>
-            In-Charge Ledger
-        </button>
+    <p class="text-xs text-slate-500 dark:text-slate-400">
+        Eggs received for external sale, and what's actually sold out of that stock — separate from Tiffin's
+        own internal supply. Akter settles in weekly/monthly lump sums rather than per sale, so "Paid in" tracks
+        those payments separately from "Sold".
+    </p>
+
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Paid in — all time</p>
+            <p class="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">{{ number_format($totalPaidIn, 2) }}</p>
+        </div>
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm dark:border-amber-900 dark:bg-amber-900/20">
+            <p class="text-xs text-amber-700 dark:text-amber-300">Outstanding / Due — all time</p>
+            <p class="mt-1 text-2xl font-semibold text-amber-800 dark:text-amber-200">{{ number_format($outstandingDue, 2) }}</p>
+        </div>
     </div>
 
-    @if ($activeView === 'sales')
-        <p class="text-xs text-slate-500 dark:text-slate-400">
-            Eggs sold to an outside buyer, separate from Tiffin's own internal supply (that's already fully
-            covered by the factory's normal Tiffin invoice) — each sale reduces the egg stock on hand.
-        </p>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Sold this week</p>
+            <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($weekSoldQuantity, 2), '0'), '.') }} eggs</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">{{ number_format($weekSoldRevenue, 2) }} revenue</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Sold this month</p>
+            <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ rtrim(rtrim(number_format($monthSoldQuantity, 2), '0'), '.') }} eggs</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">{{ number_format($monthSoldRevenue, 2) }} revenue</p>
+        </div>
+    </div>
 
+    <div class="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
         <div class="flex flex-wrap items-center gap-3">
             <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 dark:border-slate-700 dark:bg-slate-800">
-                @foreach (['' => 'All time', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
+                @foreach (['' => 'All time', '1' => 'Today', '7' => '7 Days', '15' => '15 Days', '30' => '30 Days'] as $value => $label)
                     <button
                         type="button"
-                        wire:click="$set('saleRangeFilter', '{{ $value }}')"
-                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ ($value === '' ? ($saleRangeFilter === '' && ! $saleYearFilter) : $saleRangeFilter === (string) $value) ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                        wire:click="$set('rangeFilter', '{{ $value }}')"
+                        class="rounded-md px-3 py-1.5 text-sm font-medium transition {{ $rangeFilter === (string) $value && ($value !== '' || (! $yearFilter && ! $dateFrom && ! $dateTo)) ? 'bg-brand-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
                     >
                         {{ $label }}
                     </button>
                 @endforeach
             </div>
 
-            <x-select-input wire:model.live="saleYearFilter" class="w-full sm:w-32">
-                <option value="">Every year</option>
-                @foreach ($saleAvailableYears as $year)
-                    <option value="{{ $year }}">{{ $year }}</option>
-                @endforeach
-            </x-select-input>
+            <x-text-input wire:model.live.debounce.400ms="search" placeholder="Search description or remarks" class="w-full sm:w-64" />
 
-            <x-select-input wire:model.live="saleMonthFilter" class="w-full sm:w-40" :disabled="! $saleYearFilter">
-                <option value="">{{ $saleYearFilter ? 'Every month' : 'Pick a year first' }}</option>
-                @foreach ($saleMonthOptions as $value => $label)
-                    <option value="{{ $value }}">{{ $label }}</option>
-                @endforeach
-            </x-select-input>
-
-            <x-select-input wire:model.live="saleBuyerFilter" class="w-full sm:w-48">
-                <option value="">Every buyer</option>
-                @foreach ($buyers as $buyer)
-                    <option value="{{ $buyer->id }}">{{ $buyer->name }}</option>
-                @endforeach
-            </x-select-input>
-
-            <x-select-input wire:model.live="saleInChargeFilter" class="w-full sm:w-48">
-                <option value="">Every In-Charge</option>
-                @foreach ($inCharges as $inCharge)
-                    <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
-                @endforeach
-            </x-select-input>
-        </div>
-
-        @forelse ($sales as $sale)
-            <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div class="min-w-0">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <h3 class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ $sale->buyer?->name ?: 'Egg Sale' }}</h3>
-                            <span class="text-xs text-slate-400 dark:text-slate-500">{{ $sale->sale_date->format('d M Y') }}</span>
-                            @if ($sale->payment_status === 'due')
-                                <x-badge color="amber">Due</x-badge>
-                            @elseif ($sale->payment_status === 'paid')
-                                <x-badge color="green">Paid</x-badge>
-                            @else
-                                <x-badge color="slate">Cash</x-badge>
-                            @endif
-                        </div>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Qty {{ rtrim(rtrim(number_format((float) $sale->quantity, 2), '0'), '.') }}
-                            · Rate {{ number_format((float) $sale->sale_rate, 2) }}
-                            @if ($sale->inCharge)
-                                · In-Charge: {{ $sale->inCharge->name }}
-                            @endif
-                        </p>
-                        @if ($sale->remarks)
-                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ $sale->remarks }}</p>
-                        @endif
-                    </div>
-                    <span class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white">{{ number_format((float) $sale->sale_amount, 2) }}</span>
-                </div>
-
-                @can('egg_sales.modify')
-                    <div class="mt-4 flex items-center gap-3">
-                        <x-secondary-button type="button" wire:click="startEditSale({{ $sale->id }})">
-                            Edit
-                        </x-secondary-button>
-                        <x-danger-button type="button" wire:click="confirmDeleteSale({{ $sale->id }})">
-                            Delete
-                        </x-danger-button>
-                    </div>
-                @endcan
-            </div>
-        @empty
-            <x-empty-state
-                :title="$saleAvailableYears->isNotEmpty() ? 'No sales match these filters' : 'No Egg sales recorded yet'"
-                :message="$saleAvailableYears->isNotEmpty() ? 'Try a different year, month or buyer — or clear the filters above.' : 'Record a sale whenever eggs are sold to an outside buyer.'"
-            />
-        @endforelse
-
-        {{ $sales->links('pagination::simple-tailwind') }}
-    @elseif ($activeView === 'buyer-summary')
-        <p class="text-xs text-slate-500 dark:text-slate-400">
-            Who eggs were sold to this period, how much of that is cash-in-hand versus still owed, and how
-            much was actually collected from each buyer this period — pick a Year and Month to see exactly
-            one month's worth of buyer activity and collections.
-        </p>
-
-        <div class="flex flex-wrap items-center gap-3">
-            <x-select-input wire:model.live="summaryYearFilter" class="w-full sm:w-32">
-                <option value="">Every year</option>
-                @foreach ($summaryAvailableYears as $year)
-                    <option value="{{ $year }}">{{ $year }}</option>
-                @endforeach
-            </x-select-input>
-
-            <x-select-input wire:model.live="summaryMonthFilter" class="w-full sm:w-40" :disabled="! $summaryYearFilter">
-                <option value="">{{ $summaryYearFilter ? 'Every month' : 'Pick a year first' }}</option>
-                @foreach ($summaryMonthOptions as $value => $label)
-                    <option value="{{ $value }}">{{ $label }}</option>
-                @endforeach
-            </x-select-input>
-        </div>
-
-        @if ($buyerSummaries->isEmpty())
-            <x-empty-state
-                title="No sales or payments match these filters"
-                message="Try a different year or month — or clear the filters above."
-            />
-        @else
-            <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <table class="w-full min-w-[560px] text-sm">
-                    <thead>
-                        <tr class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
-                            <th class="px-4 py-2">Buyer</th>
-                            <th class="px-4 py-2 text-right">Quantity</th>
-                            <th class="px-4 py-2 text-right">Cash</th>
-                            <th class="px-4 py-2 text-right">Due</th>
-                            <th class="px-4 py-2 text-right">
-                                Received
-                                @if ($summaryPeriodLabel)
-                                    <span class="block text-[10px] font-normal normal-case text-slate-400 dark:text-slate-500">{{ $summaryPeriodLabel }}</span>
-                                @endif
-                            </th>
-                            <th class="px-4 py-2 text-right">Total</th>
-                            <th class="px-4 py-2"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach ($buyerSummaries as $summary)
-                            <tr class="border-b border-slate-100 last:border-0 dark:border-slate-700/50">
-                                <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">
-                                    {{ $summary->buyerName }}
-                                    @if ($summary->outstandingDue > 0)
-                                        <p class="mt-0.5 text-xs font-normal text-red-600 dark:text-red-400">Owes {{ number_format($summary->outstandingDue, 2) }} overall</p>
-                                    @endif
-                                </td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ rtrim(rtrim(number_format($summary->quantity, 2), '0'), '.') }}</td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->cashAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right {{ $summary->dueAmount > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400' }}">{{ number_format($summary->dueAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->paidAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right font-semibold text-slate-900 dark:text-white">{{ number_format($summary->totalAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right whitespace-nowrap">
-                                    @if ($summary->buyerId)
-                                        <button type="button" wire:click="viewBuyerSales({{ $summary->buyerId }})" class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                                            View
-                                        </button>
-                                        @can('egg_sales.modify')
-                                            @if ($summary->outstandingDue > 0)
-                                                <button type="button" wire:click="startRecordBuyerPayment({{ $summary->buyerId }})" class="ml-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300">
-                                                    Record Payment
-                                                </button>
-                                            @endif
-                                        @endcan
-                                    @endif
-                                </td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                    <tfoot>
-                        <tr class="bg-slate-50 dark:bg-slate-900/50">
-                            <td class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400">Total</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ rtrim(rtrim(number_format($buyerSummaries->sum('quantity'), 2), '0'), '.') }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($buyerSummaries->sum('cashAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-red-600 dark:text-red-400">{{ number_format($buyerSummaries->sum('dueAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($buyerSummaries->sum('paidAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-bold text-slate-900 dark:text-white">{{ number_format($buyerSummaries->sum('totalAmount'), 2) }}</td>
-                            <td class="px-4 py-2"></td>
-                        </tr>
-                    </tfoot>
-                </table>
-            </div>
-        @endif
-    @elseif ($activeView === 'in-charge')
-        <p class="text-xs text-slate-500 dark:text-slate-400">
-            Everything each In-Charge person (e.g. Mr. Akter) does in their egg sales business — the full
-            value of every sale under their name (Cash and Due alike, since it's all their responsibility),
-            what they've spent on other things, what they've handed back to the office, and what they still
-            owe overall right now.
-        </p>
-
-        <div class="flex flex-wrap items-center gap-3">
-            <x-select-input wire:model.live="inChargeSummaryYearFilter" class="w-full sm:w-32">
-                <option value="">Every year</option>
-                @foreach ($inChargeSummaryAvailableYears as $year)
-                    <option value="{{ $year }}">{{ $year }}</option>
-                @endforeach
-            </x-select-input>
-
-            <x-select-input wire:model.live="inChargeSummaryMonthFilter" class="w-full sm:w-40" :disabled="! $inChargeSummaryYearFilter">
-                <option value="">{{ $inChargeSummaryYearFilter ? 'Every month' : 'Pick a year first' }}</option>
-                @foreach ($inChargeSummaryMonthOptions as $value => $label)
-                    <option value="{{ $value }}">{{ $label }}</option>
-                @endforeach
-            </x-select-input>
-        </div>
-
-        @if ($inChargeSummaries->isEmpty())
-            <x-empty-state
-                title="No In-Charge activity matches these filters"
-                message="Try a different year or month — or clear the filters above."
-            />
-        @else
-            <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-800">
-                <table class="w-full min-w-[760px] text-sm">
-                    <thead>
-                        <tr class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
-                            <th class="px-4 py-2">In-Charge</th>
-                            <th class="px-4 py-2 text-right">Cash</th>
-                            <th class="px-4 py-2 text-right">Due</th>
-                            <th class="px-4 py-2 text-right">
-                                Total Sales
-                                @if ($inChargeSummaryPeriodLabel)
-                                    <span class="block text-[10px] font-normal normal-case text-slate-400 dark:text-slate-500">{{ $inChargeSummaryPeriodLabel }}</span>
-                                @endif
-                            </th>
-                            <th class="px-4 py-2 text-right">Spent</th>
-                            <th class="px-4 py-2 text-right">Remitted</th>
-                            <th class="px-4 py-2 text-right">Owes Overall</th>
-                            <th class="px-4 py-2"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach ($inChargeSummaries as $summary)
-                            <tr class="border-b border-slate-100 last:border-0 dark:border-slate-700/50">
-                                <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-200">{{ $summary->inChargeName }}</td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->cashAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->dueAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200">{{ number_format($summary->totalSales, 2) }}</td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->expenseAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{{ number_format($summary->remittedAmount, 2) }}</td>
-                                <td class="px-4 py-3 text-right font-semibold {{ $summary->outstandingOwed > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-900 dark:text-white' }}">{{ number_format($summary->outstandingOwed, 2) }}</td>
-                                <td class="px-4 py-3 text-right whitespace-nowrap">
-                                    <button type="button" wire:click="viewInChargeSales({{ $summary->inChargeId }})" class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                                        View
-                                    </button>
-                                    @can('egg_sales.modify')
-                                        <button type="button" wire:click="startRecordInChargeTransaction({{ $summary->inChargeId }})" class="ml-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300">
-                                            Record Transaction
-                                        </button>
-                                    @endcan
-                                </td>
-                            </tr>
-                        @endforeach
-                    </tbody>
-                    <tfoot>
-                        <tr class="bg-slate-50 dark:bg-slate-900/50">
-                            <td class="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400">Total</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('cashAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('dueAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('totalSales'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('expenseAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-medium text-slate-600 dark:text-slate-400">{{ number_format($inChargeSummaries->sum('remittedAmount'), 2) }}</td>
-                            <td class="px-4 py-2 text-right text-sm font-bold text-slate-900 dark:text-white">{{ number_format($inChargeSummaries->sum('outstandingOwed'), 2) }}</td>
-                            <td class="px-4 py-2"></td>
-                        </tr>
-                    </tfoot>
-                </table>
-            </div>
-        @endif
-    @endif
-
-    <x-modal name="egg-sale-form" focusable>
-        <form wire:submit="saveSale" class="space-y-6 p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
-                {{ $editingSaleId ? 'Edit Sale' : 'Record Sale' }}
-            </h2>
-
-            <div>
-                <x-input-label for="sale_date" value="Sale Date" />
-                <x-text-input wire:model="sale_date" id="sale_date" type="date" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('sale_date')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="sale_quantity" value="Quantity" />
-                <x-text-input wire:model.live.debounce.400ms="sale_quantity" id="sale_quantity" type="number" step="0.01" min="0" placeholder="e.g. 100" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('sale_quantity')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="sale_rate" value="Sale Rate" />
-                <x-text-input wire:model.live.debounce.400ms="sale_rate" id="sale_rate" type="number" step="0.01" min="0" placeholder="e.g. 14.00" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('sale_rate')" class="mt-2" />
-            </div>
-
-            @if ($saleAmountPreview !== null)
-                <p class="text-sm text-slate-600 dark:text-slate-400">Sale Amount: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($saleAmountPreview, 2) }}</span></p>
+            @if ($hasActiveFilters)
+                <button type="button" wire:click="clearFilters" class="text-sm font-medium text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">
+                    Clear filters
+                </button>
             @endif
+        </div>
 
-            <div>
-                <x-input-label for="egg_buyer_id" value="Buyer" />
+        <div class="flex flex-wrap items-center gap-3">
+            <x-select-input wire:model.live="typeFilter" class="w-full sm:w-48">
+                <option value="">Received, sold &amp; paid</option>
+                <option value="received">Received only</option>
+                <option value="sold">Sold only</option>
+                <option value="payment">Payments only</option>
+            </x-select-input>
 
-                @if ($showEditBuyerFields)
-                    <div class="mt-1 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                        <x-text-input wire:model="edit_buyer_name" placeholder="Buyer name" class="block w-full" />
-                        <x-input-error :messages="$errors->get('edit_buyer_name')" class="mt-1" />
-                        <x-text-input wire:model="edit_buyer_phone" placeholder="Phone (optional)" class="block w-full" />
-                        <div class="flex items-center gap-3">
-                            <x-secondary-button type="button" wire:click="saveBuyerInline">Save Buyer</x-secondary-button>
-                            <button type="button" wire:click="$set('showEditBuyerFields', false)" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                        </div>
+            <x-select-input wire:model.live="yearFilter" class="w-full sm:w-32">
+                <option value="">Every year</option>
+                @foreach ($availableYears as $year)
+                    <option value="{{ $year }}">{{ $year }}</option>
+                @endforeach
+            </x-select-input>
+
+            <x-select-input wire:model.live="monthFilter" class="w-full sm:w-40" :disabled="! $yearFilter">
+                <option value="">{{ $yearFilter ? 'Every month' : 'Pick a year first' }}</option>
+                @foreach ($monthOptions as $value => $label)
+                    <option value="{{ $value }}">{{ $label }}</option>
+                @endforeach
+            </x-select-input>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+            <span class="text-sm text-slate-500 dark:text-slate-400">Custom dates</span>
+            <x-text-input wire:model.live="dateFrom" type="date" aria-label="From date" class="w-full sm:w-44" />
+            <span class="text-sm text-slate-400">to</span>
+            <x-text-input wire:model.live="dateTo" type="date" aria-label="To date" class="w-full sm:w-44" />
+        </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Received — {{ $scopeLabel }}</p>
+            <p class="mt-1 text-lg font-semibold text-emerald-600 dark:text-emerald-400">+{{ rtrim(rtrim(number_format($receivedInView, 2), '0'), '.') }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Sold — {{ $scopeLabel }}</p>
+            <p class="mt-1 text-lg font-semibold text-red-600 dark:text-red-400">−{{ rtrim(rtrim(number_format($soldInView, 2), '0'), '.') }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Revenue — {{ $scopeLabel }}</p>
+            <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ number_format($revenueInView, 2) }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <p class="text-xs text-slate-500 dark:text-slate-400">Paid — {{ $scopeLabel }}</p>
+            <p class="mt-1 text-lg font-semibold text-emerald-600 dark:text-emerald-400">{{ number_format($paidInView, 2) }}</p>
+        </div>
+    </div>
+
+    @forelse ($transactions as $transaction)
+        @php
+            $isReceived = $transaction->type === \App\Models\EggSaleTransaction::TYPE_RECEIVED;
+            $isPayment = $transaction->type === \App\Models\EggSaleTransaction::TYPE_PAYMENT;
+            $badgeColor = match ($transaction->type) {
+                \App\Models\EggSaleTransaction::TYPE_RECEIVED => 'green',
+                \App\Models\EggSaleTransaction::TYPE_PAYMENT => 'brand',
+                default => 'red',
+            };
+            $badgeLabel = match ($transaction->type) {
+                \App\Models\EggSaleTransaction::TYPE_RECEIVED => 'Received',
+                \App\Models\EggSaleTransaction::TYPE_PAYMENT => 'Paid',
+                default => 'Sold',
+            };
+        @endphp
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h3 class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ $transaction->description }}</h3>
+                        <span class="text-xs text-slate-400 dark:text-slate-500">{{ $transaction->transaction_date->format('d M Y') }}</span>
+                        <x-badge :color="$badgeColor">{{ $badgeLabel }}</x-badge>
                     </div>
-                @elseif (! $showNewBuyerFields)
-                    <div class="mt-1 flex items-center gap-2">
-                        <x-select-input wire:model="egg_buyer_id" id="egg_buyer_id" class="block w-full">
-                            <option value="">Select a buyer…</option>
-                            @foreach ($buyers as $buyer)
-                                <option value="{{ $buyer->id }}">{{ $buyer->name }}</option>
-                            @endforeach
-                        </x-select-input>
-                        @if ($egg_buyer_id)
-                            <button type="button" wire:click="startEditBuyerInline" class="shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                                Edit
-                            </button>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        @unless ($isPayment)
+                            Qty {{ rtrim(rtrim(number_format((float) $transaction->quantity, 2), '0'), '.') }}
+                            @if ($transaction->rate !== null)
+                                · Rate {{ number_format((float) $transaction->rate, 2) }}
+                            @endif
+                            @if ($transaction->amount !== null)
+                                ·
+                            @endif
+                        @endunless
+                        @if ($transaction->amount !== null)
+                            {{ number_format((float) $transaction->amount, 2) }}
                         @endif
-                        <button type="button" wire:click="$set('showNewBuyerFields', true)" class="shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                            + New
-                        </button>
-                    </div>
-                @else
-                    <div class="mt-1 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                        <x-text-input wire:model="new_buyer_name" placeholder="Buyer name" class="block w-full" />
-                        <x-input-error :messages="$errors->get('new_buyer_name')" class="mt-1" />
-                        <x-text-input wire:model="new_buyer_phone" placeholder="Phone (optional)" class="block w-full" />
-                        <div class="flex items-center gap-3">
-                            <x-secondary-button type="button" wire:click="addBuyerInline">Add Buyer</x-secondary-button>
-                            <button type="button" wire:click="$set('showNewBuyerFields', false)" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                        </div>
-                    </div>
-                @endif
-                <x-input-error :messages="$errors->get('egg_buyer_id')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label value="Payment" />
-                <div class="mt-1 flex gap-4">
-                    <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                        <input type="radio" wire:model="payment_status" value="cash" class="text-brand-600 focus:ring-brand-500">
-                        Cash
-                    </label>
-                    <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                        <input type="radio" wire:model="payment_status" value="due" class="text-brand-600 focus:ring-brand-500">
-                        Due
-                    </label>
-                </div>
-                <x-input-error :messages="$errors->get('payment_status')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="egg_in_charge_id" value="In-Charge" />
-
-                @if ($showEditInChargeFields)
-                    <div class="mt-1 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                        <x-text-input wire:model="edit_in_charge_name" placeholder="In-Charge name" class="block w-full" />
-                        <x-input-error :messages="$errors->get('edit_in_charge_name')" class="mt-1" />
-                        <x-text-input wire:model="edit_in_charge_phone" placeholder="Phone (optional)" class="block w-full" />
-                        <div class="flex items-center gap-3">
-                            <x-secondary-button type="button" wire:click="saveInChargeInline">Save In-Charge</x-secondary-button>
-                            <button type="button" wire:click="$set('showEditInChargeFields', false)" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                        </div>
-                    </div>
-                @elseif (! $showNewInChargeFields)
-                    <div class="mt-1 flex items-center gap-2">
-                        <x-select-input wire:model="egg_in_charge_id" id="egg_in_charge_id" class="block w-full">
-                            <option value="">Optional…</option>
-                            @foreach ($inCharges as $inCharge)
-                                <option value="{{ $inCharge->id }}">{{ $inCharge->name }}</option>
-                            @endforeach
-                        </x-select-input>
-                        @if ($egg_in_charge_id)
-                            <button type="button" wire:click="startEditInChargeInline" class="shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                                Edit
-                            </button>
-                        @endif
-                        <button type="button" wire:click="$set('showNewInChargeFields', true)" class="shrink-0 text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                            + New
-                        </button>
-                    </div>
-                @else
-                    <div class="mt-1 space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                        <x-text-input wire:model="new_in_charge_name" placeholder="In-Charge name" class="block w-full" />
-                        <x-input-error :messages="$errors->get('new_in_charge_name')" class="mt-1" />
-                        <x-text-input wire:model="new_in_charge_phone" placeholder="Phone (optional)" class="block w-full" />
-                        <div class="flex items-center gap-3">
-                            <x-secondary-button type="button" wire:click="addInChargeInline">Add In-Charge</x-secondary-button>
-                            <button type="button" wire:click="$set('showNewInChargeFields', false)" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                        </div>
-                    </div>
-                @endif
-                @if (! $showEditInChargeFields && ! $showNewInChargeFields)
-                    <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                        Whoever personally collects this sale's cash — only matters when Payment is Cash, so
-                        their In-Charge Ledger stays accurate.
                     </p>
+                    @if ($transaction->remarks)
+                        <p class="mt-1 whitespace-pre-line text-xs text-slate-500 dark:text-slate-400">{{ $transaction->remarks }}</p>
+                    @endif
+                </div>
+                <span class="shrink-0 text-sm font-semibold {{ $isReceived || $isPayment ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400' }}">
+                    @if ($isPayment)
+                        {{ number_format((float) $transaction->amount, 2) }}
+                    @else
+                        {{ $isReceived ? '+' : '−' }}{{ rtrim(rtrim(number_format((float) $transaction->quantity, 2), '0'), '.') }}
+                    @endif
+                </span>
+            </div>
+
+            @can('egg_sales.modify')
+                <div class="mt-4 flex items-center gap-3">
+                    <x-secondary-button type="button" wire:click="startEdit({{ $transaction->id }})">
+                        Edit
+                    </x-secondary-button>
+                    <x-danger-button type="button" wire:click="confirmDelete({{ $transaction->id }})">
+                        Delete
+                    </x-danger-button>
+                </div>
+            @endcan
+        </div>
+    @empty
+        <x-empty-state
+            :title="$availableYears->isNotEmpty() ? 'No entries match these filters' : 'No egg sales recorded yet'"
+            :message="$availableYears->isNotEmpty() ? 'Try different filters — or clear them above.' : 'Start by logging eggs received for external sale, then record what\'s sold.'"
+        >
+            @can('egg_sales.create')
+                <x-slot:action>
+                    <x-primary-button type="button" wire:click="startReceived">
+                        + Received
+                    </x-primary-button>
+                </x-slot:action>
+            @endcan
+        </x-empty-state>
+    @endforelse
+
+    {{ $transactions->links('pagination::simple-tailwind') }}
+
+    <x-modal name="egg-sale-transaction-form" focusable>
+        <form wire:submit="save" class="space-y-6 p-6">
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
+                @if ($type === \App\Models\EggSaleTransaction::TYPE_RECEIVED)
+                    {{ $editingId ? 'Edit Received Entry' : 'Record Eggs Received' }}
+                @elseif ($type === \App\Models\EggSaleTransaction::TYPE_PAYMENT)
+                    {{ $editingId ? 'Edit Payment' : 'Record Payment' }}
+                @else
+                    {{ $editingId ? 'Edit Sale' : 'Record Sale' }}
                 @endif
-                <x-input-error :messages="$errors->get('egg_in_charge_id')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="sale_remarks" value="Remarks" />
-                <x-textarea-input wire:model="sale_remarks" id="sale_remarks" placeholder="Optional" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('sale_remarks')" class="mt-2" />
-            </div>
-
-            <div class="flex justify-end gap-3">
-                <x-secondary-button type="button" x-on:click="$dispatch('close')">
-                    Cancel
-                </x-secondary-button>
-                <x-primary-button>
-                    {{ $editingSaleId ? 'Save Changes' : 'Record Sale' }}
-                </x-primary-button>
-            </div>
-        </form>
-    </x-modal>
-
-    <x-modal name="confirm-egg-sale-deletion" focusable>
-        <div class="p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Delete this sale?</h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">This cannot be undone.</p>
-            <div class="mt-6 flex justify-end gap-3">
-                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
-                <x-danger-button type="button" wire:click="deleteSale">Delete</x-danger-button>
-            </div>
-        </div>
-    </x-modal>
-
-    <x-modal name="egg-buyer-payment-form" focusable>
-        <form wire:submit="recordBuyerPayment" class="space-y-6 p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
-                Record Payment{{ $payingBuyer ? ' — '.$payingBuyer->name : '' }}
             </h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                Cash actually received from this buyer against what they owe overall — use this for a partial
-                payment too, not just a full settlement.
-            </p>
-
-            @if ($payingBuyer)
-                <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Currently owes: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($payingBuyer->outstandingDue, 2) }}</span>
-                </p>
-            @endif
 
             <div>
-                <x-input-label for="buyerPayAmount" value="Amount" />
-                <x-text-input wire:model="buyerPayAmount" id="buyerPayAmount" type="number" step="0.01" min="0.01" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('buyerPayAmount')" class="mt-2" />
+                <x-input-label for="egg_transaction_date" value="Date" />
+                <x-text-input wire:model="transaction_date" id="egg_transaction_date" type="date" class="mt-1 block w-full" required />
+                <x-input-error :messages="$errors->get('transaction_date')" class="mt-2" />
             </div>
 
-            <div>
-                <x-input-label for="buyerPayDate" value="Date" />
-                <x-text-input wire:model="buyerPayDate" id="buyerPayDate" type="date" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('buyerPayDate')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="buyerPayRemarks" value="Remarks" />
-                <x-textarea-input wire:model="buyerPayRemarks" id="buyerPayRemarks" placeholder="Optional" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('buyerPayRemarks')" class="mt-2" />
-            </div>
-
-            @if ($payingBuyer && $payingBuyer->payments->isNotEmpty())
+            @unless ($type === \App\Models\EggSaleTransaction::TYPE_PAYMENT)
                 <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Payment History</p>
-                    <div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">
-                        @foreach ($payingBuyer->payments as $payment)
-                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-2 py-1 text-xs dark:bg-slate-900/50">
-                                <span class="text-slate-600 dark:text-slate-400">
-                                    {{ number_format((float) $payment->amount, 2) }} — {{ $payment->paid_on->format('d M Y') }}
-                                    @if ($payment->remarks)
-                                        · {{ $payment->remarks }}
-                                    @endif
-                                </span>
-                                @can('egg_sales.modify')
-                                    <button type="button" wire:click="confirmDeleteBuyerPayment({{ $payment->id }})" class="font-medium text-red-400 hover:text-red-600 dark:text-red-400/80 dark:hover:text-red-300">
-                                        Remove
-                                    </button>
-                                @endcan
-                            </div>
-                        @endforeach
-                    </div>
+                    <x-input-label for="egg_quantity" value="Quantity" />
+                    <x-text-input wire:model.live.debounce.400ms="quantity" id="egg_quantity" type="number" step="0.01" min="0.01" placeholder="e.g. 100" class="mt-1 block w-full" required />
+                    <x-input-error :messages="$errors->get('quantity')" class="mt-2" />
+                </div>
+            @endunless
+
+            @unless ($type === \App\Models\EggSaleTransaction::TYPE_PAYMENT)
+                @php $rateRequired = $type === \App\Models\EggSaleTransaction::TYPE_SOLD; @endphp
+                <div>
+                    <x-input-label for="egg_rate" :value="$rateRequired ? 'Rate (per egg)' : 'Rate (per egg) — optional'" />
+                    <x-text-input wire:model.live.debounce.400ms="rate" id="egg_rate" type="number" step="0.01" min="0.01" placeholder="e.g. 14.00" class="mt-1 block w-full" :required="$rateRequired" />
+                    <x-input-error :messages="$errors->get('rate')" class="mt-2" />
+                    @if ($amountPreview !== null)
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Amount: {{ number_format($amountPreview, 2) }}</p>
+                    @endif
+                </div>
+            @endunless
+
+            @if ($type === \App\Models\EggSaleTransaction::TYPE_PAYMENT)
+                <div>
+                    <x-input-label for="egg_amount" value="Amount Paid" />
+                    <x-text-input wire:model="amount" id="egg_amount" type="number" step="0.01" min="0.01" placeholder="e.g. 5000.00" class="mt-1 block w-full" required />
+                    <x-input-error :messages="$errors->get('amount')" class="mt-2" />
                 </div>
             @endif
+
+            <div>
+                <x-input-label for="egg_description" :value="$type === \App\Models\EggSaleTransaction::TYPE_SOLD ? 'Sold to' : 'Note'" />
+                <x-text-input
+                    wire:model="description" id="egg_description"
+                    :placeholder="match ($type) {
+                        \App\Models\EggSaleTransaction::TYPE_SOLD => 'e.g. Rahim Store',
+                        \App\Models\EggSaleTransaction::TYPE_PAYMENT => 'Optional — e.g. Weekly settlement',
+                        default => 'Optional — e.g. Allocated for outside sale',
+                    }"
+                    class="mt-1 block w-full"
+                />
+                <x-input-error :messages="$errors->get('description')" class="mt-2" />
+            </div>
+
+            <div>
+                <x-input-label for="egg_remarks" value="Remarks" />
+                <x-textarea-input wire:model="remarks" id="egg_remarks" placeholder="Optional" class="mt-1 block w-full" />
+                <x-input-error :messages="$errors->get('remarks')" class="mt-2" />
+            </div>
 
             <div class="flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">
                     Cancel
                 </x-secondary-button>
                 <x-primary-button>
-                    Record Payment
+                    @if ($editingId)
+                        Save Changes
+                    @else
+                        {{ match ($type) {
+                            \App\Models\EggSaleTransaction::TYPE_SOLD => 'Record Sale',
+                            \App\Models\EggSaleTransaction::TYPE_PAYMENT => 'Record Payment',
+                            default => 'Record Received',
+                        } }}
+                    @endif
                 </x-primary-button>
             </div>
         </form>
     </x-modal>
 
-    <x-modal name="confirm-egg-buyer-payment-deletion" focusable>
+    <x-modal name="confirm-egg-sale-transaction-deletion" focusable>
         <div class="p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Remove this payment?</h2>
+            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Delete this entry?</h2>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                This buyer's outstanding balance will go back up by this amount. This cannot be undone.
+                The egg balance will be recalculated without it. This cannot be undone.
             </p>
             <div class="mt-6 flex justify-end gap-3">
                 <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
-                <x-danger-button type="button" wire:click="deleteBuyerPayment">Remove</x-danger-button>
-            </div>
-        </div>
-    </x-modal>
-
-    <x-modal name="egg-in-charge-transaction-form" focusable>
-        <form wire:submit="recordInChargeTransaction" class="space-y-6 p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">
-                Record Transaction{{ $transactingInCharge ? ' — '.$transactingInCharge->name : '' }}
-            </h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                An expense they paid out of the cash they're holding, or cash they've actually handed back
-                to the office — either way, this reduces what they owe overall.
-            </p>
-
-            @if ($transactingInCharge)
-                <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Currently owes: <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($transactingInCharge->outstandingOwed, 2) }}</span>
-                </p>
-            @endif
-
-            <div>
-                <x-input-label value="Type" />
-                <div class="mt-1 flex gap-4">
-                    <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                        <input type="radio" wire:model="transactionType" value="expense" class="text-brand-600 focus:ring-brand-500">
-                        Expense
-                    </label>
-                    <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                        <input type="radio" wire:model="transactionType" value="remittance" class="text-brand-600 focus:ring-brand-500">
-                        Remittance (handed to office)
-                    </label>
-                </div>
-                <x-input-error :messages="$errors->get('transactionType')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="transactionAmount" value="Amount" />
-                <x-text-input wire:model="transactionAmount" id="transactionAmount" type="number" step="0.01" min="0.01" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('transactionAmount')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="transactionDate" value="Date" />
-                <x-text-input wire:model="transactionDate" id="transactionDate" type="date" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('transactionDate')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="transactionDescription" value="Description" />
-                <x-text-input wire:model="transactionDescription" id="transactionDescription" placeholder="e.g. Egg crate repair" class="mt-1 block w-full" required />
-                <x-input-error :messages="$errors->get('transactionDescription')" class="mt-2" />
-            </div>
-
-            <div>
-                <x-input-label for="transactionRemarks" value="Remarks" />
-                <x-textarea-input wire:model="transactionRemarks" id="transactionRemarks" placeholder="Optional" class="mt-1 block w-full" />
-                <x-input-error :messages="$errors->get('transactionRemarks')" class="mt-2" />
-            </div>
-
-            @if ($transactingInCharge && $transactingInCharge->transactions->isNotEmpty())
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Transaction History</p>
-                    <div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">
-                        @foreach ($transactingInCharge->transactions as $transaction)
-                            <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-2 py-1 text-xs dark:bg-slate-900/50">
-                                <span class="text-slate-600 dark:text-slate-400">
-                                    <span class="font-medium {{ $transaction->type === 'remittance' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400' }}">
-                                        {{ $transaction->type === 'remittance' ? 'Remitted' : 'Spent' }}
-                                    </span>
-                                    {{ number_format((float) $transaction->amount, 2) }} — {{ $transaction->transaction_date->format('d M Y') }}
-                                    · {{ $transaction->description }}
-                                </span>
-                                @can('egg_sales.modify')
-                                    <button type="button" wire:click="confirmDeleteInChargeTransaction({{ $transaction->id }})" class="font-medium text-red-400 hover:text-red-600 dark:text-red-400/80 dark:hover:text-red-300">
-                                        Remove
-                                    </button>
-                                @endcan
-                            </div>
-                        @endforeach
-                    </div>
-                </div>
-            @endif
-
-            <div class="flex justify-end gap-3">
-                <x-secondary-button type="button" x-on:click="$dispatch('close')">
-                    Cancel
-                </x-secondary-button>
-                <x-primary-button>
-                    Record Transaction
-                </x-primary-button>
-            </div>
-        </form>
-    </x-modal>
-
-    <x-modal name="confirm-egg-in-charge-transaction-deletion" focusable>
-        <div class="p-6">
-            <h2 class="text-lg font-medium text-slate-900 dark:text-slate-100">Remove this transaction?</h2>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                This In-Charge person's outstanding balance will change accordingly. This cannot be undone.
-            </p>
-            <div class="mt-6 flex justify-end gap-3">
-                <x-secondary-button type="button" x-on:click="$dispatch('close')">Cancel</x-secondary-button>
-                <x-danger-button type="button" wire:click="deleteInChargeTransaction">Remove</x-danger-button>
+                <x-danger-button type="button" wire:click="delete">Delete</x-danger-button>
             </div>
         </div>
     </x-modal>

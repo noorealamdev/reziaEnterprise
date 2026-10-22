@@ -46,8 +46,6 @@ test('list renders a seeded entry and filters by company, category and month', f
         ->assertOk()
         ->assertSeeVolt('job-entries.job-entry-list');
 
-    // Year/Month default to the current month, which neither fixture date
-    // falls in — cleared here so both are in view for the rest of this test.
     Volt::test('job-entries.job-entry-list')
         ->set('yearFilter', '')
         ->assertSee('15 Aug 2026')

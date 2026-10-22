@@ -1,11 +1,9 @@
 <?php
 
 use App\Models\Company;
-use App\Models\CompanyAgreement;
 use App\Models\Expense;
-use App\Models\Invoice;
 use App\Models\JobEntry;
-use App\Models\ServiceCategory;
+use App\Support\BusinessSnapshot;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Url;
@@ -28,17 +26,6 @@ new class extends Component
     #[Url(as: 'p_month', history: true)]
     public string $profitMonthFilter = '';
 
-    public function mount(): void
-    {
-        if ($this->profitYearFilter === '') {
-            $this->profitYearFilter = (string) now()->year;
-        }
-
-        if ($this->profitMonthFilter === '') {
-            $this->profitMonthFilter = (string) now()->month;
-        }
-    }
-
     public function updatingProfitYearFilter(): void
     {
         // A month only makes sense within a chosen year — clear it if the
@@ -48,66 +35,7 @@ new class extends Component
 
     public function with(): array
     {
-        $unbilled = JobEntry::whereNull('invoice_id')->with(['company', 'serviceCategory'])->get();
-
-        // A company/category is billed monthly — the risk of actually
-        // *missing* a bill is unbilled work sitting in a month that has
-        // already ended, not this month's still-accumulating entries (that
-        // month isn't over yet, so nothing to send for it). Flagged and
-        // sorted first so a straggler from a prior month can never quietly
-        // scroll off the bottom of this list.
-        $currentMonthStart = now()->startOfMonth();
-
-        // Invoices are now generated per company *and* category, so a
-        // company can have several concurrent bills ready to go the same
-        // month — group by both instead of company alone.
-        $readyToInvoice = $unbilled
-            ->groupBy(fn (JobEntry $entry) => $entry->company_id.'-'.$entry->service_category_id)
-            ->map(function ($entries) use ($currentMonthStart) {
-                $oldestEntryDate = $entries->min('entry_date');
-
-                return [
-                    'company' => $entries->first()->company,
-                    'category' => $entries->first()->serviceCategory,
-                    'count' => $entries->count(),
-                    'total' => $entries->sum('bill_amount'),
-                    'oldestEntryDate' => $oldestEntryDate,
-                    'isOverdue' => $oldestEntryDate->lt($currentMonthStart),
-                ];
-            })
-            ->filter(fn ($group) => $group['total'] > 0)
-            ->sort(fn ($a, $b) => ($b['isOverdue'] <=> $a['isOverdue']) ?: ($b['total'] <=> $a['total']))
-            ->values();
-
-        // A manually-entered past bill has no job entries at all, so its
-        // amount has to be added on separately — it's definitionally
-        // already billed the moment it exists.
-        $billedTotal = (float) JobEntry::whereNotNull('invoice_id')->sum('bill_amount')
-            + (float) Invoice::whereNotNull('manual_amount')->sum('manual_amount');
-
-        // Balance still owed per invoice — bill total (-VAT), minus any
-        // pre-invoice advance, minus payments recorded against it since. A
-        // Partially Paid invoice still owes something, so it's included
-        // alongside Due ones; Paid invoices are excluded since their balance
-        // is zero by definition of how status gets derived.
-        $outstandingTotal = Invoice::whereIn('status', ['due', 'partial'])
-            ->withSum('jobEntries as amount', 'bill_amount')
-            ->withSum('jobEntries as advancePaid', 'company_adv_payment')
-            ->withSum('payments as paidViaPayments', 'amount')
-            ->get()
-            ->sum(function (Invoice $invoice) {
-                $amount = (float) ($invoice->manual_amount ?? $invoice->amount);
-                $vatAmount = $invoice->vat_percent ? round($amount * (float) $invoice->vat_percent / 100, 2) : 0;
-
-                return max(0, $amount - $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);
-            });
-
-        // Always literally "this calendar month, paid" — a fixed pulse,
-        // unrelated to the Companies table's own Year/Month filter below.
-        $profitThisMonth = (float) JobEntry::whereHas('invoice', fn ($query) => $query->where('status', 'paid'))
-            ->whereYear('entry_date', now()->year)
-            ->whereMonth('entry_date', now()->month)
-            ->sum('profit_amount');
+        $unbilled = BusinessSnapshot::unbilled();
 
         // Tiffin is billed as one package per department/day, not per
         // ingredient — so entries for the same company/department today are
@@ -139,21 +67,41 @@ new class extends Component
             ->sortByDesc('sortId')
             ->values();
 
+        $readyToInvoice = BusinessSnapshot::readyToInvoice();
+        $invoiceOverview = BusinessSnapshot::invoiceOverview();
+
+        $profitThisMonth = BusinessSnapshot::profitThisMonth();
+        $profitLastMonth = BusinessSnapshot::profitLastMonth();
+
         return [
             'companyCount' => Company::count(),
             'activeCompanyCount' => Company::where('is_active', true)->count(),
             'unbilledTotal' => (float) $unbilled->sum('bill_amount'),
             'unbilledCount' => $unbilled->count(),
-            'billedTotal' => $billedTotal,
-            'outstandingTotal' => (float) $outstandingTotal,
+            // How much of the unbilled total is left over from a month
+            // that's already ended — the same "at risk of actually being
+            // missed" flag readyToInvoice() sorts on, surfaced as a count
+            // for the at-a-glance strip below.
+            'overdueUnbilledCount' => $readyToInvoice->where('isOverdue', true)->sum('count'),
+            'billedTotal' => BusinessSnapshot::billedTotal(),
+            'outstandingTotal' => BusinessSnapshot::outstandingTotal(),
+            'unpaidInvoiceCount' => $invoiceOverview->firstWhere('statusValue', 'unpaid')['count'],
             'profitThisMonth' => $profitThisMonth,
+            'profitLastMonth' => $profitLastMonth,
+            // Null rather than 0% when last month had no paid profit at all
+            // to compare against — "up infinity percent" is meaningless, so
+            // the trend badge hides itself instead of showing a nonsense
+            // number.
+            'profitTrendPct' => $profitLastMonth != 0.0
+                ? round(($profitThisMonth - $profitLastMonth) / abs($profitLastMonth) * 100, 1)
+                : null,
             'readyToInvoice' => $readyToInvoice,
             'todayEntries' => $todayEntries,
             'monthlyTrend' => $this->monthlyTrend(),
             'dailyExpenseTrend' => $this->dailyExpenseTrend(),
-            'invoiceOverview' => $this->invoiceOverview(),
-            'agreementDeadlines' => $this->agreementDeadlines(),
-            ...$this->companiesFinancials(),
+            'invoiceOverview' => $invoiceOverview,
+            'agreementDeadlines' => BusinessSnapshot::agreementDeadlines(self::BREAKDOWN_LIMIT),
+            ...BusinessSnapshot::companiesFinancials($this->profitCompanyFilter, $this->profitYearFilter, $this->profitMonthFilter),
         ];
     }
 
@@ -190,82 +138,6 @@ new class extends Component
             ...$row,
             'pct' => $this->barPercent($row['total'], $max),
         ]);
-    }
-
-    /**
-     * A single at-a-glance breakdown of where every invoice stands — Paid,
-     * Unpaid (Due + Partially Paid together, since both still owe money),
-     * Signed (a signed copy is on file — independent of payment status, an
-     * invoice can be signed and still unpaid), and Not Invoiced (job entries
-     * with no invoice yet at all). Each entry links straight through to Bill
-     * Statement filtered to that exact status, so the office can actually
-     * open and view those bills rather than just eyeball a total — the
-     * categories overlap (Signed isn't mutually exclusive with Paid/Unpaid)
-     * rather than summing to one whole, so this is a set of filtered counts,
-     * not a stacked chart.
-     *
-     * @return Collection<int, array{label: string, statusValue: string, count: int, amount: float, color: string}>
-     */
-    private function invoiceOverview(): Collection
-    {
-        $rows = collect([
-            [
-                'label' => 'Paid',
-                'statusValue' => 'paid',
-                'count' => Invoice::where('status', 'paid')->count(),
-                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->where('status', 'paid'))->sum('bill_amount'),
-                'color' => 'bg-emerald-500',
-            ],
-            [
-                'label' => 'Unpaid',
-                'statusValue' => 'unpaid',
-                'count' => Invoice::whereIn('status', ['due', 'partial'])->count(),
-                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereIn('status', ['due', 'partial']))->sum('bill_amount'),
-                'color' => 'bg-rose-500',
-            ],
-            [
-                'label' => 'Signed',
-                'statusValue' => 'signed',
-                'count' => Invoice::whereNotNull('signed_copy_path')->count(),
-                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereNotNull('signed_copy_path'))->sum('bill_amount'),
-                'color' => 'bg-sky-500',
-            ],
-            [
-                'label' => 'Not Invoiced',
-                'statusValue' => 'unbilled',
-                'count' => JobEntry::whereNull('invoice_id')->count(),
-                'amount' => (float) JobEntry::whereNull('invoice_id')->sum('bill_amount'),
-                'color' => 'bg-slate-400',
-            ],
-        ]);
-
-        return $rows;
-    }
-
-    /**
-     * Every agreement that's already expired or expiring within the same
-     * lead time the email alert uses (`reports.agreement_deadline_alert_days`)
-     * — an in-app view of the same thing the Super Admin email covers, so
-     * the deadline is visible here even on a day the email never went out
-     * (e.g. SMTP isn't configured yet on a fresh deploy). Already-expired
-     * agreements sort first (most overdue), then soonest-to-expire.
-     *
-     * @return Collection<int, array{agreement: CompanyAgreement, daysRemaining: int, isExpired: bool}>
-     */
-    private function agreementDeadlines(): Collection
-    {
-        $alertCutoff = now()->addDays((int) config('reports.agreement_deadline_alert_days'))->toDateString();
-
-        return CompanyAgreement::with('company')
-            ->whereDate('end_date', '<=', $alertCutoff)
-            ->orderBy('end_date')
-            ->limit(self::BREAKDOWN_LIMIT)
-            ->get()
-            ->map(fn (CompanyAgreement $agreement) => [
-                'agreement' => $agreement,
-                'daysRemaining' => (int) round(now()->diffInDays($agreement->end_date, absolute: true)),
-                'isExpired' => $agreement->is_expired,
-            ]);
     }
 
     /**
@@ -311,151 +183,6 @@ new class extends Component
     }
 
     /**
-     * The one comprehensive table of every factory's financial scenario —
-     * what it still owes to be billed (all-time, never filtered — this is
-     * "right now" state, not a historical figure), and what it billed/cost/
-     * profited within the chosen Year/Month/Company scope (defaults to the
-     * current month, set in mount()). Broken down by company when every
-     * company is in view, or by category once a single company is selected
-     * (a company breakdown would just be one row at that point).
-     *
-     * Two profit figures, side by side, same convention the removed Cost &
-     * Profit Report page used:
-     *   - "All Work" — billed minus cost for every entry in scope, whether
-     *     or not the client has paid yet. The honest economic picture.
-     *   - "Paid Only" — only entries whose invoice is actually marked Paid.
-     *     Cash in hand, not just work done.
-     *
-     * @return array{companies: Collection<int, Company>, selectedCompany: ?Company, availableYears: Collection<int, int>, monthOptions: Collection<int, string>, totalBilled: float, totalCost: float, totalProfitAllWork: float, marginAllWork: float, totalProfitPaid: float, marginPaid: float, rows: Collection<int, array<string, mixed>>, byCompany: bool}
-     */
-    private function companiesFinancials(): array
-    {
-        $companies = Company::orderBy('name')->get();
-        $selectedCompany = $this->profitCompanyFilter
-            ? $companies->firstWhere('id', (int) $this->profitCompanyFilter)
-            : null;
-        $categories = $selectedCompany ? ServiceCategory::orderBy('sort_order')->get() : collect();
-
-        $companyScoped = JobEntry::query()
-            ->when($this->profitCompanyFilter, fn ($query) => $query->where('company_id', $this->profitCompanyFilter));
-
-        // Offered years always reflect the whole history for this company
-        // scope, not just what the current year/month filter leaves behind
-        // — same convention as Bill Statement/Daily Summary's dropdowns.
-        $availableYears = (clone $companyScoped)->select('entry_date')->distinct()->pluck('entry_date')
-            ->map(fn ($date) => $date->year)->unique()->sortDesc()->values();
-
-        // whereYear()/whereMonth() compile to each database's own portable
-        // syntax (unlike a raw YEAR()/MONTH() expression), so this still
-        // works against SQLite in tests the same as MySQL in production.
-        $entries = (clone $companyScoped)
-            ->when($this->profitYearFilter, fn ($query) => $query->whereYear('entry_date', $this->profitYearFilter))
-            ->when($this->profitMonthFilter, fn ($query) => $query->whereMonth('entry_date', $this->profitMonthFilter));
-
-        // cost_amount + shipment_tiffin_cost (Loading Unloading only —
-        // feeding labourers on the shipment, never billed to the factory) —
-        // a real cost incurred, so it belongs in "Cost incurred" too.
-        $totals = (clone $entries)->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount + COALESCE(shipment_tiffin_cost, 0)) as cost')->first();
-        $totalBilled = (float) ($totals->billed ?? 0);
-        $totalCost = (float) ($totals->cost ?? 0);
-        $totalProfitAllWork = $totalBilled - $totalCost;
-
-        $paidEntries = (clone $entries)->whereHas('invoice', fn ($query) => $query->where('status', 'paid'));
-
-        $paidTotals = (clone $paidEntries)->selectRaw('SUM(profit_amount) as profit, SUM(bill_amount) as billed')->first();
-        $totalProfitPaid = (float) ($paidTotals->profit ?? 0);
-        $totalPaidBilled = (float) ($paidTotals->billed ?? 0);
-
-        $groupBy = $selectedCompany ? 'service_category_id' : 'company_id';
-        $relation = $selectedCompany ? 'serviceCategory' : 'company';
-
-        // Unbilled is always all-time, independent of the Year/Month filter
-        // above — "what still needs billing right now" isn't a historical
-        // figure, same convention as the Unbilled stat card and Ready to
-        // Invoice further up this page.
-        $unbilledByGroup = (clone $companyScoped)
-            ->whereNull('invoice_id')
-            ->select($groupBy)
-            ->selectRaw('SUM(bill_amount) as total')
-            ->groupBy($groupBy)
-            ->pluck('total', $groupBy);
-
-        // Aggregated by the database (GROUP BY), not by loading every entry
-        // as a hydrated model and reducing in PHP — this scans the whole
-        // job_entries table otherwise, fine at a handful of rows and
-        // ruinous once real usage builds up a real history.
-        $allWorkByGroup = (clone $entries)
-            ->select($groupBy)
-            ->selectRaw('SUM(bill_amount) as billed, SUM(cost_amount + COALESCE(shipment_tiffin_cost, 0)) as cost')
-            ->groupBy($groupBy)
-            ->with($relation)
-            ->get()
-            ->keyBy($groupBy);
-
-        // cost here must match profit_amount's own definition (which already
-        // subtracts shipment_tiffin_cost) or Billed - Cost would disagree
-        // with the Profit (Paid) figure shown right beside it.
-        $paidByGroup = (clone $paidEntries)
-            ->select($groupBy)
-            ->selectRaw('SUM(bill_amount) as billed, SUM(profit_amount) as profit')
-            ->groupBy($groupBy)
-            ->get()
-            ->keyBy($groupBy);
-
-        // Every company/category with EITHER unbilled work OR any billed
-        // activity in scope gets a row — nothing going on at all stays
-        // hidden, and (Cost & Profit Report was removed) this is now the
-        // one place a factory's whole scenario lives, so no row is ever
-        // truncated or silently missing.
-        $rows = $allWorkByGroup->keys()->merge($unbilledByGroup->keys())->unique()
-            ->map(function ($id) use ($allWorkByGroup, $paidByGroup, $unbilledByGroup, $selectedCompany, $companies, $categories) {
-                $workRow = $allWorkByGroup->get($id);
-                $paidRow = $paidByGroup->get($id);
-
-                $company = $selectedCompany ? null : ($workRow?->company ?? $companies->firstWhere('id', $id));
-                $label = $selectedCompany
-                    ? ($workRow?->serviceCategory?->name ?? $categories->firstWhere('id', $id)?->name ?? 'Unknown')
-                    : ($company?->name ?? 'Unknown');
-
-                $billed = (float) ($workRow?->billed ?? 0);
-                $cost = (float) ($workRow?->cost ?? 0);
-                $profitAllWork = $billed - $cost;
-                $paidBilled = (float) ($paidRow?->billed ?? 0);
-                $profitPaid = (float) ($paidRow?->profit ?? 0);
-
-                return [
-                    'id' => $id,
-                    'label' => $label,
-                    'company' => $company,
-                    'unbilled' => (float) ($unbilledByGroup[$id] ?? 0),
-                    'billed' => $billed,
-                    'cost' => $cost,
-                    'profitAllWork' => $profitAllWork,
-                    'marginAllWork' => $billed > 0 ? round($profitAllWork / $billed * 100, 1) : 0.0,
-                    'profitPaid' => $profitPaid,
-                    'marginPaid' => $paidBilled > 0 ? round($profitPaid / $paidBilled * 100, 1) : 0.0,
-                ];
-            })
-            ->sortByDesc('profitAllWork')
-            ->values();
-
-        return [
-            'companies' => $companies,
-            'selectedCompany' => $selectedCompany,
-            'availableYears' => $availableYears,
-            'monthOptions' => collect(range(1, 12))->mapWithKeys(fn ($m) => [$m => Carbon::create(2000, $m, 1)->format('F')]),
-            'totalBilled' => $totalBilled,
-            'totalCost' => $totalCost,
-            'totalProfitAllWork' => $totalProfitAllWork,
-            'marginAllWork' => $totalBilled > 0 ? round($totalProfitAllWork / $totalBilled * 100, 1) : 0.0,
-            'totalProfitPaid' => $totalProfitPaid,
-            'marginPaid' => $totalPaidBilled > 0 ? round($totalProfitPaid / $totalPaidBilled * 100, 1) : 0.0,
-            'rows' => $rows,
-            'byCompany' => ! $selectedCompany,
-        ];
-    }
-
-    /**
      * A value's share of $max as a percentage, floored at 2% once it's
      * nonzero so a small-but-real amount never renders as an invisible
      * sliver next to a much larger one.
@@ -472,6 +199,61 @@ new class extends Component
 
 <div class="space-y-6">
     @can('dashboard.view')
+    <div>
+        <div class="flex flex-wrap items-baseline justify-between gap-2 px-1">
+            <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">This Month at a Glance</h2>
+            <span class="text-xs text-slate-400 dark:text-slate-500">{{ now()->format('F Y') }}</span>
+        </div>
+
+        <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <a
+                @if (Gate::allows('dashboard.view_profit')) href="#companies-cost-profit" wire:navigate @endif
+                class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition dark:border-slate-800 dark:bg-slate-800 {{ Gate::allows('dashboard.view_profit') ? 'hover:border-brand-300 hover:shadow-md dark:hover:border-brand-700' : '' }}"
+            >
+                <p class="text-xs text-slate-500 dark:text-slate-400">Profit so far this month</p>
+                <div class="mt-1 flex flex-wrap items-baseline gap-2">
+                    <span class="text-2xl font-semibold text-slate-900 dark:text-white">{{ number_format($profitThisMonth, 2) }}</span>
+                    @if ($profitTrendPct !== null)
+                        <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold {{ $profitTrendPct >= 0 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300' }}">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                @if ($profitTrendPct >= 0)
+                                    <path d="M5 19L19 5M19 5H9M19 5V15" />
+                                @else
+                                    <path d="M5 5L19 19M19 19H9M19 19V9" />
+                                @endif
+                            </svg>
+                            {{ number_format(abs($profitTrendPct), 1) }}%
+                        </span>
+                    @endif
+                </div>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">vs {{ number_format($profitLastMonth, 2) }} last month &middot; cash actually collected</p>
+            </a>
+
+            <a
+                @if (Gate::allows('bill_statement.view')) href="{{ route('bill-statement.index', ['status' => 'unpaid']) }}" wire:navigate @endif
+                class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition dark:border-slate-800 dark:bg-slate-800 {{ Gate::allows('bill_statement.view') ? 'hover:border-brand-300 hover:shadow-md dark:hover:border-brand-700' : '' }}"
+            >
+                <p class="text-xs text-slate-500 dark:text-slate-400">Still owed to you</p>
+                <p class="mt-1 text-2xl font-semibold text-slate-900 dark:text-white">{{ number_format($outstandingTotal, 2) }}</p>
+                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ $unpaidInvoiceCount }} {{ Str::plural('invoice', $unpaidInvoiceCount) }} billed, awaiting payment</p>
+            </a>
+
+            <a
+                @if (Gate::allows('bill_statement.view')) href="{{ route('bill-statement.index', ['status' => 'unbilled']) }}" wire:navigate @endif
+                class="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm transition dark:border-amber-900 dark:bg-amber-900/20 {{ Gate::allows('bill_statement.view') ? 'hover:border-amber-300 hover:shadow-md' : '' }}"
+            >
+                <p class="text-xs text-amber-700 dark:text-amber-300">Work not yet billed</p>
+                <p class="mt-1 text-2xl font-semibold text-amber-800 dark:text-amber-200">{{ number_format($unbilledTotal, 2) }}</p>
+                <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                    {{ $unbilledCount }} {{ Str::plural('entry', $unbilledCount) }}
+                    @if ($overdueUnbilledCount > 0)
+                        &middot; {{ $overdueUnbilledCount }} from an earlier month
+                    @endif
+                </p>
+            </a>
+        </div>
+    </div>
+
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <x-stat-card
             label="Unbilled"

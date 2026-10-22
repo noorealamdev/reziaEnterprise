@@ -1,13 +1,7 @@
 <?php
 
-use App\Models\EggBuyer;
-use App\Models\EggBuyerPayment;
-use App\Models\EggInCharge;
-use App\Models\EggInChargeTransaction;
-use App\Models\EggSale;
+use App\Models\EggSaleTransaction;
 use App\Models\RolePermission;
-use App\Models\TiffinItem;
-use App\Models\TiffinItemPurchase;
 use App\Models\User;
 use App\Permission;
 use App\UserRole;
@@ -17,874 +11,427 @@ test('guests are redirected to login', function () {
     $this->get('/egg-sales')->assertRedirect('/login');
 });
 
-test('a sale remarks is shown on its row in the sales list', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
+test('a received entry raises the stock balance and a sale lowers it', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->set('saleYearFilter', '')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('sale_remarks', 'Buyer picked up in person')
-        ->call('saveSale')
-        ->assertHasNoErrors()
-        ->assertSee('Buyer picked up in person');
-});
-
-test('a sale defaults to cash and can be recorded as due instead', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->assertSet('payment_status', 'cash')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('payment_status', 'due')
-        ->call('saveSale')
+        ->call('startReceived')
+        ->set('quantity', '500')
+        ->call('save')
         ->assertHasNoErrors();
 
-    $this->assertDatabaseHas('egg_sales', [
-        'quantity' => 200,
-        'payment_status' => 'due',
-    ]);
-});
-
-test('a sale in-charge is shown on its row and the in-charge filter narrows the list', function () {
-    $user = User::factory()->create();
-    $karim = EggInCharge::factory()->create(['name' => 'Mr. Karim']);
-    $rahim = EggInCharge::factory()->create(['name' => 'Mr. Rahim']);
-    EggSale::create([
-        'sale_date' => '2026-09-05',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-        'egg_in_charge_id' => $karim->id,
-    ]);
-    EggSale::create([
-        'sale_date' => '2026-09-06',
-        'quantity' => 100,
-        'sale_rate' => 14,
-        'sale_amount' => 1400,
-        'egg_in_charge_id' => $rahim->id,
-    ]);
-
-    $this->actingAs($user);
-
-    $component = Volt::test('egg-sales.sales-manager')
-        ->set('saleYearFilter', '')
-        ->assertSee('Mr. Karim')
-        ->assertSee('Mr. Rahim')
-        ->set('saleInChargeFilter', (string) $karim->id);
-
-    // Mr. Rahim still appears as an <option> in the In-Charge filter
-    // dropdown itself (it always lists every In-Charge person), so the
-    // meaningful assertion is the sales list's own content, not the whole
-    // page — same pattern as the buyer filter test above.
-    expect($component->viewData('sales'))->toHaveCount(1);
-    expect($component->viewData('sales')->first()->egg_in_charge_id)->toBe($karim->id);
-});
-
-test('a new in-charge person can be created inline from the sale form and is selected immediately', function () {
-    $user = User::factory()->create();
-    $this->actingAs($user);
-
     Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('showNewInChargeFields', true)
-        ->set('new_in_charge_name', 'Mr. Akter')
-        ->set('new_in_charge_phone', '01700000000')
-        ->call('addInChargeInline')
-        ->assertHasNoErrors()
-        ->assertSet('showNewInChargeFields', false);
-
-    $inCharge = EggInCharge::where('name', 'Mr. Akter')->sole();
-    expect($inCharge->phone)->toBe('01700000000');
-});
-
-test('an in-charge person can be renamed inline from the sale form', function () {
-    $user = User::factory()->create();
-    $inCharge = EggInCharge::factory()->create(['name' => 'Aktar', 'phone' => null]);
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('egg_in_charge_id', $inCharge->id)
-        ->call('startEditInChargeInline')
-        ->assertSet('edit_in_charge_name', 'Aktar')
-        ->set('edit_in_charge_name', 'Mr. Akter')
-        ->call('saveInChargeInline')
-        ->assertHasNoErrors()
-        ->assertSet('showEditInChargeFields', false);
-
-    expect($inCharge->fresh()->name)->toBe('Mr. Akter');
-});
-
-test('a duplicate in-charge name is rejected when creating inline', function () {
-    $user = User::factory()->create();
-    EggInCharge::factory()->create(['name' => 'Mr. Akter']);
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('showNewInChargeFields', true)
-        ->set('new_in_charge_name', 'Mr. Akter')
-        ->call('addInChargeInline')
-        ->assertHasErrors(['new_in_charge_name']);
-});
-
-test('recording a sale with an in-charge person persists the link', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create(['name' => 'Mr. Akter']);
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('egg_in_charge_id', $akter->id)
-        ->call('saveSale')
+        ->call('startSold')
+        ->set('quantity', '150')
+        ->set('rate', '14')
+        ->set('description', 'Rahim Store')
+        ->call('save')
         ->assertHasNoErrors();
 
-    $this->assertDatabaseHas('egg_sales', [
-        'quantity' => 200,
-        'egg_in_charge_id' => $akter->id,
-    ]);
+    expect(EggSaleTransaction::quantityBalance())->toBe(350.0);
+
+    $component = Volt::test('egg-sales.sales-manager');
+    expect($component->viewData('totalRevenue'))->toBe(2100.0);
+    $component->assertSee('Rahim Store')->assertSee('Received');
 });
 
-test('the in-charge ledger counts Due sales toward total sales and what they owe, same as Cash ones', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create(['name' => 'Mr. Akter']);
-    EggSale::create([
-        'sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400,
-        'egg_in_charge_id' => $akter->id, 'payment_status' => 'cash',
-    ]);
-    EggSale::create([
-        'sale_date' => '2026-09-06', 'quantity' => 50, 'sale_rate' => 14, 'sale_amount' => 700,
-        'egg_in_charge_id' => $akter->id, 'payment_status' => 'due',
-    ]);
-
-    $this->actingAs($user);
-
-    $summaries = Volt::test('egg-sales.sales-manager')
-        ->set('inChargeSummaryYearFilter', '')
-        ->call('switchView', 'in-charge')
-        ->viewData('inChargeSummaries');
-
-    $akterSummary = $summaries->firstWhere('inChargeId', $akter->id);
-    expect($akterSummary->cashAmount)->toBe(1400.0);
-    expect($akterSummary->dueAmount)->toBe(700.0);
-    expect($akterSummary->totalSales)->toBe(2100.0);
-    // An In-Charge person owns their whole operation, Cash and Due alike —
-    // the Due sale is still their responsibility to account for, same as
-    // Mr. Akter's real, entirely-Due sales history.
-    expect($akterSummary->outstandingOwed)->toBe(2100.0);
-});
-
-test('recording an expense reduces what an in-charge person owes overall', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create(['name' => 'Mr. Akter']);
-    EggSale::create([
-        'sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400,
-        'egg_in_charge_id' => $akter->id, 'payment_status' => 'cash',
-    ]);
-
-    $this->actingAs($user);
+test('more sold than ever received shows a negative balance instead of blocking the entry', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->received()->create(['quantity' => 100]);
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startRecordInChargeTransaction', $akter->id)
-        ->set('transactionType', 'expense')
-        ->set('transactionAmount', '400')
-        ->set('transactionDate', '2026-09-06')
-        ->set('transactionDescription', 'Egg crate repair')
-        ->call('recordInChargeTransaction')
+        ->call('startSold')
+        ->set('quantity', '250')
+        ->set('rate', '14')
+        ->set('description', 'Corner Bakery')
+        ->call('save')
         ->assertHasNoErrors();
 
-    $this->assertDatabaseHas('egg_in_charge_transactions', [
-        'egg_in_charge_id' => $akter->id,
-        'type' => EggInChargeTransaction::TYPE_EXPENSE,
-        'amount' => 400,
-        'description' => 'Egg crate repair',
-    ]);
-    expect($akter->fresh()->outstandingOwed)->toBe(1000.0);
+    expect(EggSaleTransaction::quantityBalance())->toBe(-150.0);
 });
 
-test('recording a remittance reduces what an in-charge person owes overall, same as an expense', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create(['name' => 'Mr. Akter']);
-    EggSale::create([
-        'sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400,
-        'egg_in_charge_id' => $akter->id, 'payment_status' => 'cash',
-    ]);
-
-    $this->actingAs($user);
+test('a received entry can optionally record a rate, which computes its value', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startRecordInChargeTransaction', $akter->id)
-        ->set('transactionType', 'remittance')
-        ->set('transactionAmount', '1400')
-        ->set('transactionDate', '2026-09-10')
-        ->set('transactionDescription', 'Handed to office')
-        ->call('recordInChargeTransaction')
+        ->call('startReceived')
+        ->set('quantity', '500')
+        ->call('save')
         ->assertHasNoErrors();
 
-    expect($akter->fresh()->outstandingOwed)->toBe(0.0);
-});
-
-test('a description is required to record an in-charge transaction', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create();
-    $this->actingAs($user);
+    $withoutRate = EggSaleTransaction::sole();
+    expect($withoutRate->rate)->toBeNull();
+    expect($withoutRate->amount)->toBeNull();
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startRecordInChargeTransaction', $akter->id)
-        ->set('transactionAmount', '400')
-        ->set('transactionDate', '2026-09-06')
-        ->call('recordInChargeTransaction')
-        ->assertHasErrors(['transactionDescription']);
-});
-
-test('deleting an in-charge transaction restores the outstanding balance', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create();
-    EggSale::create([
-        'sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400,
-        'egg_in_charge_id' => $akter->id, 'payment_status' => 'cash',
-    ]);
-    $transaction = EggInChargeTransaction::create([
-        'egg_in_charge_id' => $akter->id,
-        'type' => EggInChargeTransaction::TYPE_EXPENSE,
-        'transaction_date' => '2026-09-06',
-        'amount' => 400,
-        'description' => 'Egg crate repair',
-    ]);
-
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('confirmDeleteInChargeTransaction', $transaction->id)
-        ->call('deleteInChargeTransaction');
-
-    $this->assertDatabaseMissing('egg_in_charge_transactions', ['id' => $transaction->id]);
-    expect($akter->fresh()->outstandingOwed)->toBe(1400.0);
-});
-
-test('viewing an in-charge person from the ledger jumps to the Sales tab filtered to them', function () {
-    $user = User::factory()->create();
-    $akter = EggInCharge::factory()->create(['name' => 'Mr. Akter']);
-    EggSale::create([
-        'sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400,
-        'egg_in_charge_id' => $akter->id, 'payment_status' => 'cash',
-    ]);
-
-    $this->actingAs($user);
-
-    $component = Volt::test('egg-sales.sales-manager')
-        ->set('inChargeSummaryYearFilter', '')
-        ->call('switchView', 'in-charge')
-        ->call('viewInChargeSales', $akter->id)
-        ->assertSet('activeView', 'sales')
-        ->assertSet('saleInChargeFilter', (string) $akter->id);
-
-    expect($component->viewData('sales'))->toHaveCount(1);
-});
-
-test('an accountant gets a 403 recording or removing an in-charge transaction', function () {
-    $accountant = User::factory()->accountant()->create();
-    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggSalesCreate->value]);
-    $akter = EggInCharge::factory()->create();
-
-    $this->actingAs($accountant);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startRecordInChargeTransaction', $akter->id)
-        ->set('transactionAmount', '200')
-        ->set('transactionDate', '2026-09-10')
-        ->set('transactionDescription', 'Fuel')
-        ->call('recordInChargeTransaction')
-        ->assertForbidden();
-
-    $transaction = EggInChargeTransaction::create([
-        'egg_in_charge_id' => $akter->id,
-        'type' => EggInChargeTransaction::TYPE_EXPENSE,
-        'transaction_date' => '2026-09-10',
-        'amount' => 100,
-        'description' => 'Fuel',
-    ]);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('confirmDeleteInChargeTransaction', $transaction->id)
-        ->call('deleteInChargeTransaction')
-        ->assertForbidden();
-});
-
-test('a buyer filter narrows the listed sales', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    $rahim = EggBuyer::factory()->create(['name' => 'Rahim Store']);
-    EggSale::create(['sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400, 'egg_buyer_id' => $karim->id]);
-    EggSale::create(['sale_date' => '2026-09-06', 'quantity' => 50, 'sale_rate' => 14, 'sale_amount' => 700, 'egg_buyer_id' => $rahim->id]);
-
-    $this->actingAs($user);
-
-    $component = Volt::test('egg-sales.sales-manager')->set('saleYearFilter', '')->set('saleBuyerFilter', (string) $karim->id);
-
-    // Rahim Store still appears as an <option> in the buyer filter dropdown
-    // itself (it always lists every buyer), so the meaningful assertion is
-    // the sales list's own content, not the whole page.
-    expect($component->viewData('sales'))->toHaveCount(1);
-    expect($component->viewData('sales')->first()->egg_buyer_id)->toBe($karim->id);
-});
-
-test('a new buyer can be created inline from the sale form and is selected immediately', function () {
-    $user = User::factory()->create();
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('showNewBuyerFields', true)
-        ->set('new_buyer_name', 'Karim Traders')
-        ->set('new_buyer_phone', '01700000000')
-        ->call('addBuyerInline')
-        ->assertHasNoErrors()
-        ->assertSet('showNewBuyerFields', false);
-
-    $buyer = EggBuyer::where('name', 'Karim Traders')->sole();
-    expect($buyer->phone)->toBe('01700000000');
-});
-
-test('a buyer can be renamed inline from the sale form', function () {
-    $user = User::factory()->create();
-    $buyer = EggBuyer::factory()->create(['name' => 'Karim Traders', 'phone' => null]);
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('egg_buyer_id', $buyer->id)
-        ->call('startEditBuyerInline')
-        ->assertSet('edit_buyer_name', 'Karim Traders')
-        ->set('edit_buyer_name', 'Karim Traders Ltd')
-        ->set('edit_buyer_phone', '01700000000')
-        ->call('saveBuyerInline')
-        ->assertHasNoErrors()
-        ->assertSet('showEditBuyerFields', false);
-
-    expect($buyer->fresh()->name)->toBe('Karim Traders Ltd');
-    expect($buyer->fresh()->phone)->toBe('01700000000');
-});
-
-test('renaming a buyer to another buyer\'s existing name is rejected', function () {
-    $user = User::factory()->create();
-    EggBuyer::factory()->create(['name' => 'Rahim Store']);
-    $buyer = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('egg_buyer_id', $buyer->id)
-        ->call('startEditBuyerInline')
-        ->set('edit_buyer_name', 'Rahim Store')
-        ->call('saveBuyerInline')
-        ->assertHasErrors(['edit_buyer_name']);
-
-    expect($buyer->fresh()->name)->toBe('Karim Traders');
-});
-
-test('an accountant can rename a buyer via the sale form', function () {
-    $accountant = User::factory()->accountant()->create();
-    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggSalesCreate->value]);
-    $buyer = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-
-    $this->actingAs($accountant);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('egg_buyer_id', $buyer->id)
-        ->call('startEditBuyerInline')
-        ->set('edit_buyer_name', 'Karim Traders Ltd')
-        ->call('saveBuyerInline')
+        ->call('startReceived')
+        ->set('quantity', '300')
+        ->set('rate', '11.5')
+        ->call('save')
         ->assertHasNoErrors();
 
-    expect($buyer->fresh()->name)->toBe('Karim Traders Ltd');
+    $withRate = EggSaleTransaction::where('quantity', 300)->sole();
+    expect((float) $withRate->rate)->toBe(11.5);
+    expect((float) $withRate->amount)->toBe(3450.0);
 });
 
-test('a duplicate buyer name is rejected when creating inline', function () {
-    $user = User::factory()->create();
-    EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    $this->actingAs($user);
+test('a sale needs a description and a rate but a received entry defaults its note and has no amount', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('showNewBuyerFields', true)
-        ->set('new_buyer_name', 'Karim Traders')
-        ->call('addBuyerInline')
-        ->assertHasErrors(['new_buyer_name']);
-});
-
-test('the buyer summary groups sales by buyer with a cash/due/paid split', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    $rahim = EggBuyer::factory()->create(['name' => 'Rahim Store']);
-    EggSale::create([
-        'sale_date' => '2026-09-05', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400,
-        'egg_buyer_id' => $karim->id, 'payment_status' => 'cash',
-    ]);
-    EggSale::create([
-        'sale_date' => '2026-09-10', 'quantity' => 50, 'sale_rate' => 14, 'sale_amount' => 700,
-        'egg_buyer_id' => $karim->id, 'payment_status' => 'due',
-    ]);
-    EggSale::create([
-        'sale_date' => '2026-09-12', 'quantity' => 30, 'sale_rate' => 14, 'sale_amount' => 420,
-        'egg_buyer_id' => $rahim->id, 'payment_status' => 'paid',
-    ]);
-
-    $this->actingAs($user);
-
-    $summaries = Volt::test('egg-sales.sales-manager')
-        ->set('summaryYearFilter', '')
-        ->call('switchView', 'buyer-summary')
-        ->assertSee('Karim Traders')
-        ->assertSee('Rahim Store')
-        ->viewData('buyerSummaries');
-
-    expect($summaries)->toHaveCount(2);
-
-    $karimSummary = $summaries->firstWhere('buyerName', 'Karim Traders');
-    expect($karimSummary->buyerId)->toBe($karim->id);
-    expect($karimSummary->quantity)->toBe(150.0);
-    expect($karimSummary->cashAmount)->toBe(1400.0);
-    expect($karimSummary->dueAmount)->toBe(700.0);
-    expect($karimSummary->totalAmount)->toBe(2100.0);
-
-    $rahimSummary = $summaries->firstWhere('buyerName', 'Rahim Store');
-    expect($rahimSummary->paidAmount)->toBe(420.0);
-    expect($rahimSummary->totalAmount)->toBe(420.0);
-});
-
-test('the buyer summary year and month filters narrow which sales are grouped', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    EggSale::create(['sale_date' => '2025-08-10', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400, 'egg_buyer_id' => $karim->id]);
-    EggSale::create(['sale_date' => '2026-03-05', 'quantity' => 50, 'sale_rate' => 14, 'sale_amount' => 700, 'egg_buyer_id' => $karim->id]);
-
-    $this->actingAs($user);
-
-    $byYear = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2025');
-    expect($byYear->viewData('buyerSummaries')->first()->quantity)->toBe(100.0);
-
-    $byMonth = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026')
-        ->set('summaryMonthFilter', '3');
-    expect($byMonth->viewData('buyerSummaries')->first()->quantity)->toBe(50.0);
-});
-
-test('the buyer summary labels which period the Received figure is for, but shows no label when unfiltered', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create();
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_date' => '2026-09-05']);
-    $this->actingAs($user);
-
-    $allTime = Volt::test('egg-sales.sales-manager')->set('summaryYearFilter', '')->call('switchView', 'buyer-summary');
-    expect($allTime->viewData('summaryPeriodLabel'))->toBeNull();
-    $allTime->assertDontSee('All Time');
-
-    $yearOnly = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026');
-    expect($yearOnly->viewData('summaryPeriodLabel'))->toBe('2026');
-
-    $yearAndMonth = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026')
-        ->set('summaryMonthFilter', '9')
-        ->assertSee('September 2026');
-    expect($yearAndMonth->viewData('summaryPeriodLabel'))->toBe('September 2026');
-});
-
-test('viewing a buyer from the summary jumps to the Sales tab filtered to that buyer and period', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    EggSale::create(['sale_date' => '2026-03-05', 'quantity' => 50, 'sale_rate' => 14, 'sale_amount' => 700, 'egg_buyer_id' => $karim->id]);
-
-    $this->actingAs($user);
-
-    $component = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026')
-        ->set('summaryMonthFilter', '3')
-        ->call('viewBuyerSales', $karim->id)
-        ->assertSet('activeView', 'sales')
-        ->assertSet('saleBuyerFilter', (string) $karim->id)
-        ->assertSet('saleYearFilter', '2026')
-        ->assertSet('saleMonthFilter', '3');
-
-    expect($component->viewData('sales'))->toHaveCount(1);
-});
-
-test('recording a partial payment reduces a buyer\'s outstanding balance without touching their due sales', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create();
-    $sale = EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_amount' => 1000, 'payment_status' => 'due']);
-
-    $this->actingAs($user);
+        ->call('startSold')
+        ->set('quantity', '50')
+        ->call('save')
+        ->assertHasErrors(['description', 'rate']);
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startRecordBuyerPayment', $karim->id)
-        ->assertSet('buyerPayAmount', '1000')
-        ->set('buyerPayAmount', '400')
-        ->set('buyerPayDate', '2026-09-10')
-        ->set('buyerPayRemarks', 'Partial payment')
-        ->call('recordBuyerPayment')
+        ->call('startReceived')
+        ->set('quantity', '50')
+        ->call('save')
         ->assertHasNoErrors();
 
-    $this->assertDatabaseHas('egg_buyer_payments', [
-        'egg_buyer_id' => $karim->id,
-        'amount' => 400,
-        'remarks' => 'Partial payment',
-    ]);
-    expect($karim->fresh()->outstandingDue)->toBe(600.0);
-    // Recording a payment never flips the underlying sale's own status —
-    // it's tracked as a separate running balance, not per-sale.
-    expect($sale->fresh()->payment_status)->toBe('due');
+    $entry = EggSaleTransaction::sole();
+    expect($entry->description)->toBe('Received');
+    expect($entry->amount)->toBeNull();
 });
 
-test('a second payment can finish settling what the first partial payment left outstanding', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create();
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_amount' => 1000, 'payment_status' => 'due']);
-    EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 400, 'paid_on' => '2026-09-10']);
-
-    $this->actingAs($user);
+test('type and quantity are validated', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startRecordBuyerPayment', $karim->id)
-        ->assertSet('buyerPayAmount', '600')
-        ->call('recordBuyerPayment')
-        ->assertHasNoErrors();
-
-    expect($karim->fresh()->outstandingDue)->toBe(0.0);
-});
-
-test('a payment cannot exceed what the buyer currently owes', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create();
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_amount' => 500, 'payment_status' => 'due']);
-
-    $this->actingAs($user);
+        ->call('startSold')
+        ->set('quantity', '0')
+        ->set('rate', '10')
+        ->set('description', 'X')
+        ->call('save')
+        ->assertHasErrors(['quantity']);
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startRecordBuyerPayment', $karim->id)
-        ->set('buyerPayAmount', '600')
-        ->set('buyerPayDate', '2026-09-10')
-        ->call('recordBuyerPayment')
-        ->assertHasErrors(['buyerPayAmount']);
+        ->call('startSold')
+        ->set('type', 'gifted')
+        ->set('quantity', '10')
+        ->set('rate', '10')
+        ->set('description', 'X')
+        ->call('save')
+        ->assertHasErrors(['type']);
 
-    expect($karim->fresh()->outstandingDue)->toBe(500.0);
+    expect(EggSaleTransaction::count())->toBe(0);
 });
 
-test('the buyer summary shows what a buyer owes overall and offers Record Payment only while something is outstanding', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_date' => '2026-09-05', 'sale_amount' => 1000, 'payment_status' => 'due']);
-    EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 1000, 'paid_on' => '2026-09-06']);
-
-    $this->actingAs($user);
-
-    $summaries = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026')
-        ->set('summaryMonthFilter', '9')
-        // The modal's own title also reads "Record Payment", so this checks
-        // for the button's wire:click call specifically, not just the text.
-        ->assertDontSee("startRecordBuyerPayment({$karim->id})", false)
-        ->viewData('buyerSummaries');
-
-    $karimSummary = $summaries->firstWhere('buyerName', 'Karim Traders');
-    expect($karimSummary->outstandingDue)->toBe(0.0);
-    // The client collects payment from buyers every month, so the amount
-    // actually received this period must be visible in the table too.
-    expect($karimSummary->paidAmount)->toBe(1000.0);
-});
-
-test('a payment received this period only counts toward this period, not a different month', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_date' => '2026-09-05', 'sale_amount' => 1000, 'payment_status' => 'due']);
-    EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 300, 'paid_on' => '2026-09-10']);
-    EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 200, 'paid_on' => '2026-08-15']);
-
-    $this->actingAs($user);
+test('the stock balance and revenue stay all-time while the period totals follow the filters', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->received()->create(['quantity' => 1000, 'transaction_date' => '2026-08-05']);
+    EggSaleTransaction::factory()->create(['quantity' => 300, 'amount' => 4200, 'transaction_date' => '2026-09-05']);
+    EggSaleTransaction::factory()->received()->create(['quantity' => 500, 'transaction_date' => '2026-09-06']);
 
     $september = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026')
-        ->set('summaryMonthFilter', '9')
-        ->viewData('buyerSummaries')
-        ->firstWhere('buyerName', 'Karim Traders');
+        ->set('yearFilter', '2026')
+        ->set('monthFilter', '9');
 
-    expect($september->paidAmount)->toBe(300.0);
-    // outstandingDue is deliberately all-time, so it reflects both payments
-    // regardless of which month is being viewed.
-    expect($september->outstandingDue)->toBe(500.0);
+    expect($september->viewData('receivedInView'))->toBe(500.0);
+    expect($september->viewData('soldInView'))->toBe(300.0);
+    expect($september->viewData('revenueInView'))->toBe(4200.0);
+    expect($september->viewData('quantityBalance'))->toBe(1200.0);
+    expect($september->viewData('totalRevenue'))->toBe(4200.0);
 });
 
-test('a buyer who only pays this period, with no new sale, still gets their own row', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create(['name' => 'Karim Traders']);
-    // Sold last month, nothing new this month — just a payment coming in
-    // against last month's due balance.
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_date' => '2026-08-05', 'sale_amount' => 1000, 'payment_status' => 'due']);
-    EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 400, 'paid_on' => '2026-09-10']);
+test('the week and month sold summaries are always this week/month, regardless of the active filters', function () {
+    $this->actingAs(User::factory()->create());
 
-    $this->actingAs($user);
+    // Far enough before today that it falls outside both the current
+    // calendar week and the current calendar month, however today lands
+    // within its own month (at least ~26 days earlier, always > 7 days).
+    $previousMonth = now()->startOfMonth()->subMonthNoOverflow()->addDays(2);
 
-    $summaries = Volt::test('egg-sales.sales-manager')
-        ->call('switchView', 'buyer-summary')
-        ->set('summaryYearFilter', '2026')
-        ->set('summaryMonthFilter', '9')
-        ->viewData('buyerSummaries');
+    EggSaleTransaction::factory()->create(['quantity' => 40, 'amount' => 560, 'transaction_date' => now()]);
+    EggSaleTransaction::factory()->create(['quantity' => 15, 'amount' => 210, 'transaction_date' => $previousMonth]);
 
-    $karimSummary = $summaries->firstWhere('buyerName', 'Karim Traders');
-    expect($karimSummary)->not->toBeNull();
-    expect($karimSummary->quantity)->toBe(0.0);
-    expect($karimSummary->dueAmount)->toBe(0.0);
-    expect($karimSummary->paidAmount)->toBe(400.0);
-    expect($karimSummary->outstandingDue)->toBe(600.0);
+    // A filter narrowed to a completely different scope must not affect
+    // these two headline numbers.
+    $component = Volt::test('egg-sales.sales-manager')
+        ->set('yearFilter', (string) $previousMonth->year)
+        ->set('monthFilter', (string) $previousMonth->month);
+
+    expect($component->viewData('weekSoldQuantity'))->toBe(40.0);
+    expect($component->viewData('weekSoldRevenue'))->toBe(560.0);
+    expect($component->viewData('monthSoldQuantity'))->toBe(40.0);
+    expect($component->viewData('monthSoldRevenue'))->toBe(560.0);
 });
 
-test('deleting a payment restores the buyer\'s outstanding balance', function () {
-    $user = User::factory()->create();
-    $karim = EggBuyer::factory()->create();
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_amount' => 1000, 'payment_status' => 'due']);
-    $payment = EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 400, 'paid_on' => '2026-09-10']);
-
-    $this->actingAs($user);
+test('a payment raises paid-in and lowers what Akter still owes, without touching the egg balance', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->call('confirmDeleteBuyerPayment', $payment->id)
-        ->call('deleteBuyerPayment');
-
-    $this->assertDatabaseMissing('egg_buyer_payments', ['id' => $payment->id]);
-    expect($karim->fresh()->outstandingDue)->toBe(1000.0);
-});
-
-test('an accountant gets a 403 recording or removing a buyer payment', function () {
-    $accountant = User::factory()->accountant()->create();
-    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggSalesCreate->value]);
-    $karim = EggBuyer::factory()->create();
-    EggSale::factory()->create(['egg_buyer_id' => $karim->id, 'sale_amount' => 500, 'payment_status' => 'due']);
-
-    $this->actingAs($accountant);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startRecordBuyerPayment', $karim->id)
-        ->set('buyerPayAmount', '200')
-        ->set('buyerPayDate', '2026-09-10')
-        ->call('recordBuyerPayment')
-        ->assertForbidden();
-
-    $payment = EggBuyerPayment::create(['egg_buyer_id' => $karim->id, 'amount' => 100, 'paid_on' => '2026-09-10']);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('confirmDeleteBuyerPayment', $payment->id)
-        ->call('deleteBuyerPayment')
-        ->assertForbidden();
-});
-
-test('recording a sale persists with a computed sale amount and reduces stock on hand', function () {
-    $user = User::factory()->create();
-    $egg = TiffinItem::create(['name' => 'Egg']);
-    TiffinItemPurchase::create([
-        'tiffin_item_id' => $egg->id,
-        'purchase_date' => '2026-09-01',
-        'quantity' => 1000,
-        'purchase_rate' => 11.5,
-        'purchase_amount' => 11500,
-    ]);
-    $buyer = EggBuyer::factory()->create(['name' => 'Local Market']);
-
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '200')
-        ->set('sale_rate', '14')
-        ->set('egg_buyer_id', $buyer->id)
-        ->call('saveSale')
+        ->call('startSold')
+        ->set('quantity', '200')
+        ->set('rate', '14')
+        ->set('description', 'Rahim Store')
+        ->call('save')
         ->assertHasNoErrors();
 
-    $this->assertDatabaseHas('egg_sales', [
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-        'egg_buyer_id' => $buyer->id,
-    ]);
-
-    // Stock still lives on the Egg Purchases page — 1000 purchased - 0
-    // consumed - 200 sold = 800.
-    $component = Volt::test('egg-purchases.purchase-manager');
-    expect($component->viewData('eggInStock'))->toBe(800.0);
-});
-
-test('editing a sale updates it', function () {
-    $user = User::factory()->create();
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-02',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-    ]);
-
-    $this->actingAs($user);
+    expect(EggSaleTransaction::outstandingDue())->toBe(2800.0);
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startEditSale', $sale->id)
-        ->set('sale_quantity', '250')
-        ->set('sale_rate', '15')
-        ->call('saveSale')
+        ->call('startPayment')
+        ->set('amount', '1000')
+        ->call('save')
         ->assertHasNoErrors();
 
-    expect((float) $sale->fresh()->quantity)->toBe(250.0);
-    expect((float) $sale->fresh()->sale_rate)->toBe(15.0);
-    expect((float) $sale->fresh()->sale_amount)->toBe(3750.0);
+    expect(EggSaleTransaction::totalPaidIn())->toBe(1000.0);
+    expect(EggSaleTransaction::outstandingDue())->toBe(1800.0);
+    // Money changing hands isn't an egg leaving stock.
+    expect(EggSaleTransaction::quantityBalance())->toBe(-200.0);
 });
 
-test('deleting a sale removes it', function () {
-    $user = User::factory()->create();
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-02',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-    ]);
-
-    $this->actingAs($user);
+test('a payment needs only an amount — quantity, rate and description are all optional', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->call('confirmDeleteSale', $sale->id)
-        ->call('deleteSale');
-
-    $this->assertDatabaseMissing('egg_sales', ['id' => $sale->id]);
-});
-
-test('quantity and sale rate are required to record a sale', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
+        ->call('startPayment')
+        ->call('save')
+        ->assertHasErrors(['amount']);
 
     Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->call('saveSale')
-        ->assertHasErrors(['sale_quantity', 'sale_rate']);
-});
-
-test('year and month filters narrow the listed sales', function () {
-    $user = User::factory()->create();
-
-    EggSale::create(['sale_date' => '2025-08-10', 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400]);
-    EggSale::create(['sale_date' => '2026-03-05', 'quantity' => 120, 'sale_rate' => 14, 'sale_amount' => 1680]);
-
-    $this->actingAs($user);
-
-    $byYear = Volt::test('egg-sales.sales-manager')->set('saleYearFilter', '2025');
-    expect($byYear->viewData('sales'))->toHaveCount(1);
-
-    $byMonth = Volt::test('egg-sales.sales-manager')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '3');
-    expect($byMonth->viewData('sales'))->toHaveCount(1);
-
-    $wrongMonth = Volt::test('egg-sales.sales-manager')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '4');
-    expect($wrongMonth->viewData('sales'))->toHaveCount(0);
-});
-
-test('changing the sale year clears an incompatible month selection', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '3')
-        ->set('saleYearFilter', '2025')
-        ->assertSet('saleMonthFilter', '');
-});
-
-test('the sale quick range filter only counts sales within that window', function () {
-    $user = User::factory()->create();
-
-    EggSale::create(['sale_date' => now()->subDays(3)->toDateString(), 'quantity' => 100, 'sale_rate' => 14, 'sale_amount' => 1400]);
-    EggSale::create(['sale_date' => now()->subDays(20)->toDateString(), 'quantity' => 200, 'sale_rate' => 14, 'sale_amount' => 2800]);
-    EggSale::create(['sale_date' => now()->subDays(25)->toDateString(), 'quantity' => 150, 'sale_rate' => 14, 'sale_amount' => 2100]);
-
-    $this->actingAs($user);
-
-    $byWeek = Volt::test('egg-sales.sales-manager')->set('saleRangeFilter', '7');
-    expect($byWeek->viewData('sales'))->toHaveCount(1);
-
-    $byFifteenDays = Volt::test('egg-sales.sales-manager')->set('saleRangeFilter', '15');
-    expect($byFifteenDays->viewData('sales'))->toHaveCount(1);
-
-    $byThirtyDays = Volt::test('egg-sales.sales-manager')->set('saleRangeFilter', '30');
-    expect($byThirtyDays->viewData('sales'))->toHaveCount(3);
-});
-
-test('choosing a sale range clears the year and month, and vice versa', function () {
-    $user = User::factory()->create();
-
-    $this->actingAs($user);
-
-    Volt::test('egg-sales.sales-manager')
-        ->set('saleYearFilter', '2026')
-        ->set('saleMonthFilter', '3')
-        ->set('saleRangeFilter', '7')
-        ->assertSet('saleYearFilter', '')
-        ->assertSet('saleMonthFilter', '')
-        ->set('saleYearFilter', '2025')
-        ->assertSet('saleRangeFilter', '');
-});
-
-test('an accountant can record a sale but gets a 403 trying to edit or delete one', function () {
-    $accountant = User::factory()->accountant()->create();
-    RolePermission::create(['role' => UserRole::Accountant->value, 'permission' => Permission::EggSalesCreate->value]);
-    $sale = EggSale::create([
-        'sale_date' => '2026-09-01',
-        'quantity' => 200,
-        'sale_rate' => 14,
-        'sale_amount' => 2800,
-    ]);
-
-    $this->actingAs($accountant);
-
-    Volt::test('egg-sales.sales-manager')
-        ->call('startCreateSale')
-        ->set('sale_date', '2026-09-05')
-        ->set('sale_quantity', '100')
-        ->set('sale_rate', '14')
-        ->call('saveSale')
+        ->call('startPayment')
+        ->set('amount', '2500')
+        ->call('save')
         ->assertHasNoErrors();
 
-    Volt::test('egg-sales.sales-manager')
-        ->call('startEditSale', $sale->id)
-        ->set('sale_quantity', '999')
-        ->call('saveSale')
-        ->assertForbidden();
+    $entry = EggSaleTransaction::sole();
+    expect($entry->type)->toBe('payment');
+    expect((float) $entry->quantity)->toBe(0.0);
+    expect($entry->rate)->toBeNull();
+    expect($entry->description)->toBe('Payment');
+});
+
+test('outstanding due clamps at zero when payments exceed what was sold', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->create(['quantity' => 100, 'amount' => 1400]);
+    EggSaleTransaction::factory()->payment()->create(['amount' => 2000]);
+
+    expect(EggSaleTransaction::outstandingDue())->toBe(0.0);
+});
+
+test('the type filter can narrow the ledger down to payments only', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->payment()->count(2)->create();
+    EggSaleTransaction::factory()->count(3)->create();
+
+    expect(Volt::test('egg-sales.sales-manager')->set('yearFilter', '')->set('typeFilter', 'payment')->viewData('transactions'))->toHaveCount(2);
+});
+
+test('recording a payment shows a toast alert', function () {
+    $this->actingAs(User::factory()->create());
 
     Volt::test('egg-sales.sales-manager')
-        ->call('confirmDeleteSale', $sale->id)
-        ->call('deleteSale')
+        ->call('startPayment')
+        ->set('amount', '1500')
+        ->call('save')
+        ->assertDispatched('toast', message: 'Payment recorded.', type: 'success');
+});
+
+test('editing and deleting an entry recalculates the balance', function () {
+    $this->actingAs(User::factory()->create());
+    $received = EggSaleTransaction::factory()->received()->create(['quantity' => 1000]);
+    $sold = EggSaleTransaction::factory()->create(['quantity' => 400, 'amount' => 5000]);
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('startEdit', $sold->id)
+        ->set('quantity', '250')
+        ->call('save')
+        ->assertHasNoErrors();
+    expect(EggSaleTransaction::quantityBalance())->toBe(750.0);
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('confirmDelete', $received->id)
+        ->call('delete');
+    expect(EggSaleTransaction::quantityBalance())->toBe(-250.0);
+});
+
+test('a user with only egg_sales.view sees the ledger but cannot add, edit or delete', function () {
+    $staff = User::factory()->staff()->create();
+    RolePermission::create(['role' => UserRole::Staff->value, 'permission' => Permission::EggSalesView->value]);
+    $entry = EggSaleTransaction::factory()->create();
+
+    $this->actingAs($staff)->get('/egg-sales')->assertOk();
+
+    Volt::test('egg-sales.sales-manager')
+        ->assertDontSee('+ Record Sale')
+        ->assertDontSee('+ Received')
+        ->assertDontSee('+ Record Payment')
+        ->call('startSold')
+        ->set('quantity', '10')
+        ->set('rate', '10')
+        ->set('description', 'X')
+        ->call('save')
         ->assertForbidden();
+
+    Volt::test('egg-sales.sales-manager')->call('startEdit', $entry->id)->call('save')->assertForbidden();
+    Volt::test('egg-sales.sales-manager')->call('confirmDelete', $entry->id)->call('delete')->assertForbidden();
+});
+
+test('an accountant without the egg sales permissions is forbidden from the page', function () {
+    $this->actingAs(User::factory()->accountant()->create())
+        ->get('/egg-sales')
+        ->assertForbidden();
+});
+
+test('the type filter narrows the ledger to received or sold entries', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->received()->count(2)->create();
+    EggSaleTransaction::factory()->count(3)->create();
+
+    expect(Volt::test('egg-sales.sales-manager')->set('yearFilter', '')->set('typeFilter', 'received')->viewData('transactions'))->toHaveCount(2);
+    expect(Volt::test('egg-sales.sales-manager')->set('yearFilter', '')->set('typeFilter', 'sold')->viewData('transactions'))->toHaveCount(3);
+    expect(Volt::test('egg-sales.sales-manager')->set('yearFilter', '')->set('typeFilter', 'nonsense')->viewData('transactions'))->toHaveCount(5);
+});
+
+test('search matches the description or the remarks, case-insensitively', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->create(['description' => 'Rahim Store', 'remarks' => null]);
+    EggSaleTransaction::factory()->create(['description' => 'Corner Bakery', 'remarks' => 'delivered to Rahim lane']);
+    EggSaleTransaction::factory()->create(['description' => 'Local Market Vendor', 'remarks' => null]);
+
+    $found = Volt::test('egg-sales.sales-manager')->set('yearFilter', '')->set('search', 'rahim');
+    expect($found->viewData('transactions')->pluck('description')->all())
+        ->toEqualCanonicalizing(['Rahim Store', 'Corner Bakery']);
+});
+
+test('quick range shows only entries within the last N days, counting today', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->create(['transaction_date' => now()->toDateString()]);
+    EggSaleTransaction::factory()->create(['transaction_date' => now()->subDays(6)->toDateString()]);
+    EggSaleTransaction::factory()->create(['transaction_date' => now()->subDays(7)->toDateString()]);
+    EggSaleTransaction::factory()->create(['transaction_date' => now()->subDays(40)->toDateString()]);
+
+    expect(Volt::test('egg-sales.sales-manager')->set('rangeFilter', '1')->viewData('transactions'))->toHaveCount(1);
+    expect(Volt::test('egg-sales.sales-manager')->set('rangeFilter', '7')->viewData('transactions'))->toHaveCount(2);
+    expect(Volt::test('egg-sales.sales-manager')->set('rangeFilter', '30')->viewData('transactions'))->toHaveCount(3);
+});
+
+test('a custom from-to range is inclusive and either end can be left open', function () {
+    $this->actingAs(User::factory()->create());
+    foreach (['2026-09-01', '2026-09-10', '2026-09-20'] as $date) {
+        EggSaleTransaction::factory()->create(['transaction_date' => $date]);
+    }
+
+    expect(Volt::test('egg-sales.sales-manager')->set('dateFrom', '2026-09-10')->set('dateTo', '2026-09-20')->viewData('transactions'))->toHaveCount(2);
+    expect(Volt::test('egg-sales.sales-manager')->set('dateFrom', '2026-09-11')->viewData('transactions'))->toHaveCount(1);
+    expect(Volt::test('egg-sales.sales-manager')->set('dateTo', '2026-09-10')->viewData('transactions'))->toHaveCount(2);
+    expect(Volt::test('egg-sales.sales-manager')->set('dateFrom', 'garbage')->viewData('transactions'))->toHaveCount(3);
+});
+
+test('the date scopes are mutually exclusive and the totals are labelled with the active one', function () {
+    $this->actingAs(User::factory()->create());
+
+    Volt::test('egg-sales.sales-manager')
+        ->set('yearFilter', '2026')
+        ->set('monthFilter', '9')
+        ->assertSee('September 2026')
+        ->set('rangeFilter', '7')
+        ->assertSet('yearFilter', '')
+        ->assertSet('monthFilter', '')
+        ->assertSee('last 7 days')
+        ->set('dateFrom', '2026-09-01')
+        ->assertSet('rangeFilter', '')
+        ->set('dateTo', '2026-09-19')
+        ->assertSee('01 Sep 2026 – 19 Sep 2026')
+        ->set('yearFilter', '2026')
+        ->assertSet('dateFrom', '')
+        ->assertSet('dateTo', '');
+});
+
+test('filters combine, and the totals follow them while the balance stays all-time', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->received()->create(['quantity' => 1000, 'description' => 'Received', 'transaction_date' => '2026-09-01']);
+    EggSaleTransaction::factory()->create(['quantity' => 200, 'amount' => 2800, 'description' => 'Rahim Store', 'transaction_date' => '2026-09-02']);
+    EggSaleTransaction::factory()->create(['quantity' => 300, 'amount' => 4200, 'description' => 'Corner Bakery', 'transaction_date' => '2026-09-03']);
+
+    $view = Volt::test('egg-sales.sales-manager')
+        ->set('yearFilter', '')
+        ->set('typeFilter', 'sold')
+        ->set('search', 'rahim');
+
+    expect($view->viewData('transactions'))->toHaveCount(1);
+    expect($view->viewData('soldInView'))->toBe(200.0);
+    expect($view->viewData('receivedInView'))->toBe(0.0);
+    expect($view->viewData('quantityBalance'))->toBe(500.0);
+});
+
+test('clear filters resets every filter at once', function () {
+    $this->actingAs(User::factory()->create());
+
+    Volt::test('egg-sales.sales-manager')
+        ->set('typeFilter', 'sold')
+        ->set('search', 'rahim')
+        ->set('dateFrom', '2026-09-01')
+        ->assertSee('Clear filters')
+        ->call('clearFilters')
+        ->assertSet('typeFilter', '')
+        ->assertSet('search', '')
+        ->assertSet('dateFrom', '')
+        ->assertDontSee('Clear filters');
+});
+
+test('an entry\'s remarks are shown on its row, and rows without remarks show none', function () {
+    $this->actingAs(User::factory()->create());
+    EggSaleTransaction::factory()->create(['description' => 'Rahim Store', 'remarks' => 'Paid half in advance']);
+    EggSaleTransaction::factory()->received()->create(['description' => 'Received', 'remarks' => null]);
+
+    Volt::test('egg-sales.sales-manager')
+        ->set('yearFilter', '')
+        ->assertSee('Paid half in advance');
+
+    Volt::test('egg-sales.sales-manager')
+        ->set('yearFilter', '')
+        ->call('startSold')
+        ->set('quantity', '75')
+        ->set('rate', '14')
+        ->set('description', 'Local Market Vendor')
+        ->set('remarks', 'Picked up by the vendor directly')
+        ->call('save')
+        ->assertHasNoErrors()
+        ->assertSee('Picked up by the vendor directly');
+});
+
+test('creating, editing and deleting an entry each show a toast alert', function () {
+    $this->actingAs(User::factory()->create());
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('startSold')
+        ->set('quantity', '50')
+        ->set('rate', '14')
+        ->set('description', 'Rahim Store')
+        ->call('save')
+        ->assertDispatched('toast', message: 'Sale recorded.', type: 'success');
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('startReceived')
+        ->set('quantity', '500')
+        ->call('save')
+        ->assertDispatched('toast', message: 'Received entry recorded.', type: 'success');
+
+    $entry = EggSaleTransaction::where('description', 'Rahim Store')->sole();
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('startEdit', $entry->id)
+        ->set('quantity', '75')
+        ->call('save')
+        ->assertDispatched('toast', message: 'Entry updated.', type: 'success');
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('confirmDelete', $entry->id)
+        ->call('delete')
+        ->assertDispatched('toast', message: 'Entry deleted.', type: 'success');
+});
+
+test('a failed validation shows no success toast', function () {
+    $this->actingAs(User::factory()->create());
+
+    Volt::test('egg-sales.sales-manager')
+        ->call('startSold')
+        ->set('quantity', '50')
+        ->call('save')
+        ->assertHasErrors(['description', 'rate'])
+        ->assertNotDispatched('toast');
 });

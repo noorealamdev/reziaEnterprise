@@ -4,12 +4,13 @@ namespace App\Console\Commands;
 
 use App\Mail\DailyReportMail;
 use App\Models\Company;
-use App\Models\Invoice;
 use App\Models\JobEntry;
 use App\Models\User;
+use App\Support\BusinessSnapshot;
 use App\UserRole;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Mail;
 
 class SendDailyReport extends Command
@@ -51,52 +52,79 @@ class SendDailyReport extends Command
     }
 
     /**
+     * Mirrors the Dashboard's own sections (resources/views/livewire/dashboard/dashboard.blade.php)
+     * so the daily email gives the same full picture as logging in and
+     * looking at it — the figures come from App\Support\BusinessSnapshot,
+     * the same source the Dashboard itself reads, so the two can never
+     * quietly disagree.
+     *
      * @return array<string, mixed>
      */
     private function reportData(Carbon $date): array
     {
-        $unbilled = JobEntry::whereNull('invoice_id')->with(['company', 'serviceCategory'])->get();
+        $unbilled = BusinessSnapshot::unbilled();
+        $todayEntries = JobEntry::whereDate('entry_date', $date->toDateString())
+            ->with(['company', 'serviceCategory', 'tiffinDepartment'])
+            ->get();
 
-        // Same company+category grouping as the Dashboard's "Ready to
-        // Invoice" panel (resources/views/livewire/dashboard/dashboard.blade.php).
-        $readyToInvoice = $unbilled
-            ->groupBy(fn (JobEntry $entry) => $entry->company_id.'-'.$entry->service_category_id)
-            ->map(fn ($entries) => [
-                'company' => $entries->first()->company,
-                'category' => $entries->first()->serviceCategory,
-                'count' => $entries->count(),
-                'total' => $entries->sum('bill_amount'),
-            ])
-            ->filter(fn ($group) => $group['total'] > 0)
-            ->sortByDesc('total')
-            ->values();
-
-        $outstandingTotal = Invoice::whereIn('status', ['due', 'partial'])
-            ->withSum('jobEntries as amount', 'bill_amount')
-            ->withSum('jobEntries as advancePaid', 'company_adv_payment')
-            ->withSum('payments as paidViaPayments', 'amount')
-            ->get()
-            ->sum(function (Invoice $invoice) {
-                $amount = (float) ($invoice->manual_amount ?? $invoice->amount);
-                $vatAmount = $invoice->vat_percent ? round($amount * (float) $invoice->vat_percent / 100, 2) : 0;
-
-                return max(0, $amount - $vatAmount - (float) $invoice->advancePaid - (float) $invoice->paidViaPayments);
-            });
-
-        $todayEntries = JobEntry::whereDate('entry_date', $date->toDateString())->get();
+        // Companies — Cost & Profit, scoped to the report's own month, same
+        // "All Work" vs "Paid Only" distinction the Dashboard shows.
+        $companiesFinancials = BusinessSnapshot::companiesFinancials(
+            '',
+            (string) $date->year,
+            (string) $date->month,
+        );
 
         return [
             'companyCount' => Company::count(),
             'todayEntryCount' => $todayEntries->count(),
             'todayTotal' => (float) $todayEntries->sum('bill_amount'),
+            'todayActivity' => $this->groupTodayActivity($todayEntries),
             'unbilledTotal' => (float) $unbilled->sum('bill_amount'),
             'unbilledCount' => $unbilled->count(),
-            'outstandingTotal' => (float) $outstandingTotal,
+            'billedTotal' => BusinessSnapshot::billedTotal(),
+            'outstandingTotal' => BusinessSnapshot::outstandingTotal(),
+            'profitThisMonth' => BusinessSnapshot::profitThisMonth(),
             'monthToDateTotal' => (float) JobEntry::whereBetween('entry_date', [
                 $date->copy()->startOfMonth()->toDateString(),
                 $date->copy()->endOfMonth()->toDateString(),
             ])->sum('bill_amount'),
-            'readyToInvoice' => $readyToInvoice,
+            'readyToInvoice' => BusinessSnapshot::readyToInvoice(),
+            'invoiceOverview' => BusinessSnapshot::invoiceOverview(),
+            'agreementDeadlines' => BusinessSnapshot::agreementDeadlines(),
+            'companiesRows' => $companiesFinancials['rows'],
+            'companiesMonthLabel' => $date->format('F Y'),
         ];
+    }
+
+    /**
+     * Same Tiffin-batch collapsing the Dashboard's "Today's Activity" panel
+     * uses — one row per department/day rather than one per ingredient —
+     * so the email reads the same way the in-app view does instead of
+     * spamming a dozen near-duplicate lines for a single Tiffin delivery.
+     *
+     * @param  Collection<int, JobEntry>  $todayEntries
+     * @return Collection<int, object>
+     */
+    private function groupTodayActivity(Collection $todayEntries): Collection
+    {
+        return $todayEntries
+            ->groupBy(fn (JobEntry $entry) => ($entry->tiffin_department_id && $entry->serviceCategory->name === 'Tiffin')
+                ? "tiffin-{$entry->company_id}-{$entry->tiffin_department_id}"
+                : "single-{$entry->id}")
+            ->map(function ($group) {
+                $first = $group->first();
+                $isTiffinBatch = $first->tiffin_department_id && $first->serviceCategory->name === 'Tiffin';
+
+                return (object) [
+                    'company' => $first->company,
+                    'serviceCategory' => $first->serviceCategory,
+                    'label' => $isTiffinBatch ? $first->tiffinDepartment->name : $first->supply_type,
+                    'billAmount' => (float) $group->sum('bill_amount'),
+                    'sortId' => $first->id,
+                ];
+            })
+            ->sortByDesc('sortId')
+            ->values();
     }
 }

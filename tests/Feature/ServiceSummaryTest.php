@@ -396,8 +396,11 @@ test('a preset is highlighted as active only when the picked range matches it ex
     expect($component->viewData('activePreset'))->toBe('today');
 
     // Hand-editing the From date breaks the match — no preset is "active"
-    // once the range no longer corresponds to one.
-    $component->set('fromDate', now()->subDays(3)->toDateString());
+    // once the range no longer corresponds to one. 45 days back is outside
+    // every preset's range (the widest, last_30_days, only reaches 29 days
+    // back) — a small offset like 3 once coincidentally equalled
+    // this_week's Monday start on a Thursday, flaking the test.
+    $component->set('fromDate', now()->subDays(45)->toDateString());
     expect($component->viewData('activePreset'))->toBeNull();
 });
 

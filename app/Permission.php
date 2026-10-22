@@ -67,6 +67,10 @@ enum Permission: string
     case SajjatNewspapersCreate = 'sajjat.newspapers.create';
     case SajjatNewspapersModify = 'sajjat.newspapers.modify';
 
+    case CanteenView = 'canteen.view';
+    case CanteenCreate = 'canteen.create';
+    case CanteenModify = 'canteen.modify';
+
     case PersonalLedgerManage = 'personal-ledger.manage';
 
     case SettingsManage = 'settings.manage';
@@ -119,6 +123,9 @@ enum Permission: string
             self::SajjatNewspapersView => 'View Sajjat newspapers & their payments',
             self::SajjatNewspapersCreate => 'Add newspapers & record newspaper payments',
             self::SajjatNewspapersModify => 'Edit / delete newspapers & their payments',
+            self::CanteenView => 'View Canteen daily purchases, profit & cost',
+            self::CanteenCreate => 'Record Canteen daily entries',
+            self::CanteenModify => 'Edit / delete Canteen entries',
             self::PersonalLedgerManage => 'Use the Personal Ledger (contacts, sales & payments)',
             self::SettingsManage => 'Manage company logo',
         };
@@ -145,6 +152,7 @@ enum Permission: string
             self::ExpensesView, self::ExpensesCreate, self::ExpensesModify => 'Expenses',
             self::SajjatView, self::SajjatCreate, self::SajjatModify,
             self::SajjatNewspapersView, self::SajjatNewspapersCreate, self::SajjatNewspapersModify => 'Sajjat',
+            self::CanteenView, self::CanteenCreate, self::CanteenModify => 'Canteen',
             self::PersonalLedgerManage => 'Personal Ledger',
             self::SettingsManage => 'Settings',
         };

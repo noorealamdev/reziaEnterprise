@@ -411,6 +411,139 @@ test('Profit This Month only counts paid invoices for the current calendar month
         ->assertSee('400.00');
 });
 
+test('the at-a-glance strip shows the profit trend against last month', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $thisMonthInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'GLANCE-THIS',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->toDateString(),
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 1200,
+        'cost_amount' => 1000,
+        'invoice_id' => $thisMonthInvoice->id,
+    ]);
+
+    $lastMonthInvoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'GLANCE-LAST',
+        'period_start' => now()->subMonthNoOverflow()->startOfMonth()->toDateString(),
+        'period_end' => now()->subMonthNoOverflow()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->subMonthNoOverflow()->toDateString(),
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->subMonthNoOverflow()->toDateString(),
+        'bill_amount' => 1100,
+        'cost_amount' => 1000,
+        'invoice_id' => $lastMonthInvoice->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('dashboard.dashboard');
+    // This month 200 profit, last month 100 — a 100% increase.
+    expect($component->viewData('profitThisMonth'))->toBe(200.0);
+    expect($component->viewData('profitLastMonth'))->toBe(100.0);
+    expect($component->viewData('profitTrendPct'))->toBe(100.0);
+
+    $this->get('/dashboard')->assertOk()->assertSee('This Month at a Glance')->assertSee('100.0%');
+});
+
+test('the profit trend is hidden, not shown as a nonsense percentage, when last month had nothing to compare against', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    $invoice = Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'invoice_number' => 'GLANCE-ONLY',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'paid',
+        'paid_at' => now()->toDateString(),
+    ]);
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $category->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 500,
+        'cost_amount' => 300,
+        'invoice_id' => $invoice->id,
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('dashboard.dashboard');
+    expect($component->viewData('profitLastMonth'))->toBe(0.0);
+    expect($component->viewData('profitTrendPct'))->toBeNull();
+});
+
+test('the at-a-glance strip counts how many entries are overdue from an earlier month and how many invoices are still unpaid', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $labour = makeServiceCategory('Daily Basic Labour');
+    // A different category, so this doesn't fold into the same
+    // company+category group as the overdue entries below — a group's
+    // isOverdue flag covers the whole group, so mixing old and fresh
+    // entries in one group would make this assertion meaningless.
+    $loadingUnloading = makeServiceCategory('Loading Unloading');
+
+    // Unbilled, left over from a month that's already ended.
+    JobEntry::factory()->count(2)->create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'entry_date' => now()->subMonthNoOverflow()->startOfMonth()->toDateString(),
+        'bill_amount' => 100,
+    ]);
+    // Unbilled, but still within the current month — not overdue.
+    JobEntry::factory()->create([
+        'company_id' => $company->id,
+        'service_category_id' => $loadingUnloading->id,
+        'entry_date' => now()->toDateString(),
+        'bill_amount' => 50,
+    ]);
+
+    Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'invoice_number' => 'GLANCE-DUE',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'due',
+    ]);
+    Invoice::create([
+        'company_id' => $company->id,
+        'service_category_id' => $labour->id,
+        'invoice_number' => 'GLANCE-PARTIAL',
+        'period_start' => now()->startOfMonth()->toDateString(),
+        'period_end' => now()->endOfMonth()->toDateString(),
+        'status' => 'partial',
+    ]);
+
+    $this->actingAs($user);
+
+    $component = Volt::test('dashboard.dashboard');
+    expect($component->viewData('overdueUnbilledCount'))->toBe(2);
+    expect($component->viewData('unpaidInvoiceCount'))->toBe(2);
+
+    $this->get('/dashboard')->assertOk()->assertSee('2 from an earlier month')->assertSee('2 invoices billed, awaiting payment');
+});
+
 test('the companies table flags a loss in red and a profit in green', function () {
     $user = User::factory()->create();
     $losingCompany = Company::factory()->create(['name' => 'Losing Co']);

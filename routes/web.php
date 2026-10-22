@@ -200,6 +200,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->middleware('can:sajjat.newspapers.view')
         ->name('sajjat.newspapers');
 
+    Route::get('canteen', fn () => view('canteen.index'))
+        ->middleware('can:canteen.view')
+        ->name('canteen.index');
+
     // Super Admin only via a hard gate, never a grantable permission — see
     // AppServiceProvider. Used to live as a Settings tab.
     Route::get('personal-ledger', fn () => view('personal-ledger.index'))

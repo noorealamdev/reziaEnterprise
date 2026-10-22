@@ -1,6 +1,6 @@
 <?php
 
-use App\Models\EggSale;
+use App\Models\EggSaleTransaction;
 use App\Models\EggWaste;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
@@ -115,21 +115,6 @@ new class extends Component
     public function mount(): void
     {
         $this->paginationPath = request()->url();
-
-        if ($this->yearFilter === '' && $this->rangeFilter === '') {
-            $this->yearFilter = (string) now()->year;
-            $this->monthFilter = (string) now()->month;
-        }
-
-        if ($this->supplyYearFilter === '' && $this->supplyRangeFilter === '') {
-            $this->supplyYearFilter = (string) now()->year;
-            $this->supplyMonthFilter = (string) now()->month;
-        }
-
-        if ($this->wasteYearFilter === '' && $this->wasteRangeFilter === '') {
-            $this->wasteYearFilter = (string) now()->year;
-            $this->wasteMonthFilter = (string) now()->month;
-        }
     }
 
     public function updatingItemFilter(): void
@@ -545,7 +530,7 @@ new class extends Component
             ->where('supply_type', 'Egg')
             ->sum('quantity');
 
-        $totalSold = (float) EggSale::sum('quantity');
+        $totalSold = (float) EggSaleTransaction::where('type', EggSaleTransaction::TYPE_SOLD)->sum('quantity');
         $totalWasted = (float) EggWaste::sum('quantity');
 
         // The whole egg business's own P&L, across every destination eggs
@@ -559,7 +544,7 @@ new class extends Component
         $tiffinRevenue = (float) JobEntry::whereNotNull('tiffin_department_id')
             ->where('supply_type', 'Egg')
             ->sum('cost_amount');
-        $externalRevenue = (float) EggSale::sum('sale_amount');
+        $externalRevenue = EggSaleTransaction::totalRevenue();
         $totalPurchaseCost = (float) TiffinItemPurchase::sum('purchase_amount');
         $eggProfitTotal = $tiffinRevenue + $externalRevenue - $totalPurchaseCost;
 
@@ -569,7 +554,7 @@ new class extends Component
             'eggTotalSold' => $totalSold,
             'eggTotalWasted' => $totalWasted,
             'eggInStock' => $totalPurchased - $totalConsumed - $totalSold - $totalWasted,
-            'eggTotalRevenue' => (float) EggSale::sum('sale_amount'),
+            'eggTotalRevenue' => EggSaleTransaction::totalRevenue(),
             'eggProfitTotal' => round($eggProfitTotal, 2),
         ];
     }
