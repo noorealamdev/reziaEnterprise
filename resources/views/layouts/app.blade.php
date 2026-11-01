@@ -17,10 +17,10 @@
         @vite(['resources/css/app.css', 'resources/js/app.js'])
     </head>
     <body class="font-sans antialiased">
-        <div x-data="{ sidebarOpen: false }" class="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950">
+        <div x-data="{ sidebarOpen: false }" class="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 print:block print:h-auto print:overflow-visible">
             <x-layout.sidebar />
 
-            <div class="flex flex-1 flex-col overflow-y-auto">
+            <div class="flex flex-1 flex-col overflow-y-auto print:block print:overflow-visible">
                 <livewire:layout.navigation />
 
                 <!-- Page Heading -->
@@ -31,7 +31,7 @@
                 @endif
 
                 <!-- Page Content -->
-                <main class="flex-1 p-4 sm:p-6">
+                <main class="flex-1 p-4 sm:p-6 print:p-0">
                     {{ $slot }}
                 </main>
             </div>

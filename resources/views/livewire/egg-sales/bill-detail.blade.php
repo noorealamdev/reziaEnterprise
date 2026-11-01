@@ -303,8 +303,8 @@ new class extends Component
     </div>
 
     {{-- The printable document handed to the buyer. --}}
-    <div class="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-800 print:!mt-0 print:border-0 print:p-0 print:shadow-none">
-        <div class="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden select-none">
+    <div class="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-800 print:!mt-0 print:overflow-visible print:border-0 print:p-0 print:shadow-none">
+        <div class="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden select-none print:fixed">
             <x-application-logo class="h-96 w-96 grayscale opacity-5 print:opacity-10" />
         </div>
 
@@ -336,7 +336,7 @@ new class extends Component
 
             <p class="mt-4 text-sm font-semibold text-slate-900 dark:text-white">Sub: Bill For Egg Supply {{ $bill->isWholeMonth ? 'Month' : 'Period' }} Of {{ $bill->periodLabel }}.</p>
 
-            <div class="mt-4 overflow-x-auto">
+            <div class="mt-4 overflow-x-auto print:overflow-visible">
                 <table class="w-full min-w-[560px] border-collapse text-sm">
                     <thead>
                         <tr class="border border-slate-300 bg-slate-100 text-left dark:border-slate-600 dark:bg-slate-900/50">
@@ -361,7 +361,7 @@ new class extends Component
                 </table>
             </div>
 
-            <div class="mt-4 flex justify-end">
+            <div class="mt-4 flex justify-end print:break-inside-avoid">
                 <table class="w-full max-w-sm text-sm">
                     <tbody>
                         <tr class="{{ $paid > 0 ? '' : 'text-base font-bold' }}">
@@ -382,9 +382,9 @@ new class extends Component
                 </table>
             </div>
 
-            <p class="mt-4 text-sm text-slate-700 dark:text-slate-300">In Word: {{ $amountInWords }} Only.</p>
+            <p class="mt-4 text-sm text-slate-700 print:break-before-avoid dark:text-slate-300">In Word: {{ $amountInWords }} Only.</p>
 
-            <div class="mt-16 flex items-end justify-between text-sm">
+            <div class="mt-16 flex items-end justify-between text-sm print:break-before-avoid print:break-inside-avoid">
                 <div class="text-center">
                     <p class="w-48 border-t border-slate-400 pt-1 text-slate-700 dark:border-slate-500 dark:text-slate-300">Buyer Signature</p>
                 </div>

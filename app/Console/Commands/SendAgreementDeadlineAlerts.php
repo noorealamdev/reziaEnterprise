@@ -56,7 +56,7 @@ class SendAgreementDeadlineAlerts extends Command
 
         $mailAgreements = $agreements->map(fn (CompanyAgreement $agreement) => [
             'agreement' => $agreement,
-            'daysRemaining' => (int) round(now()->diffInDays($agreement->end_date, absolute: true)),
+            'daysRemaining' => (int) now()->startOfDay()->diffInDays($agreement->end_date, absolute: true),
         ]);
 
         foreach ($recipients as $recipient) {

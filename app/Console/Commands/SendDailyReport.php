@@ -67,13 +67,16 @@ class SendDailyReport extends Command
             ->with(['company', 'serviceCategory', 'tiffinDepartment'])
             ->get();
 
-        // Companies — Cost & Profit, scoped to the report's own month, same
-        // "All Work" vs "Paid Only" distinction the Dashboard shows.
-        $companiesFinancials = BusinessSnapshot::companiesFinancials(
-            '',
-            (string) $date->year,
-            (string) $date->month,
-        );
+        // Companies — Cost & Profit, scoped to the report's own month. In the
+        // first days of a month nothing is recorded yet, so it shows last
+        // month rather than a table of zeros.
+        $companiesMonth = $date->copy();
+        $companiesRows = $this->companyRows($companiesMonth);
+
+        if ($companiesRows->isEmpty()) {
+            $companiesMonth = $date->copy()->startOfMonth()->subMonthNoOverflow();
+            $companiesRows = $this->companyRows($companiesMonth);
+        }
 
         return [
             'companyCount' => Company::count(),
@@ -84,17 +87,28 @@ class SendDailyReport extends Command
             'unbilledCount' => $unbilled->count(),
             'billedTotal' => BusinessSnapshot::billedTotal(),
             'outstandingTotal' => BusinessSnapshot::outstandingTotal(),
-            'profitThisMonth' => BusinessSnapshot::profitThisMonth(),
-            'monthToDateTotal' => (float) JobEntry::whereBetween('entry_date', [
-                $date->copy()->startOfMonth()->toDateString(),
-                $date->copy()->endOfMonth()->toDateString(),
-            ])->sum('bill_amount'),
+            'profitAndLoss' => BusinessSnapshot::profitAndLoss(),
+            'billsNotSubmitted' => BusinessSnapshot::billsNotSubmitted(),
+            'billsDueSoon' => BusinessSnapshot::billsDueSoon(),
             'readyToInvoice' => BusinessSnapshot::readyToInvoice(),
             'invoiceOverview' => BusinessSnapshot::invoiceOverview(),
             'agreementDeadlines' => BusinessSnapshot::agreementDeadlines(),
-            'companiesRows' => $companiesFinancials['rows'],
-            'companiesMonthLabel' => $date->format('F Y'),
+            'companiesRows' => $companiesRows,
+            'companiesMonthLabel' => $companiesMonth->format('F Y'),
         ];
+    }
+
+    /**
+     * Only companies with work in that month. The Dashboard's table also lists
+     * companies whose only activity is older unbilled work.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    private function companyRows(Carbon $month): Collection
+    {
+        return BusinessSnapshot::companiesFinancials('', (string) $month->year, (string) $month->month)['rows']
+            ->filter(fn (array $row) => $row['billed'] > 0 || $row['cost'] > 0)
+            ->values();
     }
 
     /**

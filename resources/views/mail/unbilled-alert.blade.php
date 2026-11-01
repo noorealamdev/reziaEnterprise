@@ -1,15 +1,11 @@
 <x-mail::message>
-# Unbilled Alert
+# Bills not submitted to the factory
 
-The following {{ $groups->count() }} {{ Str::plural('group', $groups->count()) }} {{ $groups->count() === 1 ? 'has' : 'have' }} unbilled work that's been sitting for a while and may need invoicing:
+A month's bills are due by the {{ \App\Support\BusinessSnapshot::BILL_DEADLINE_DAY }}th of the next month. A bill counts as submitted once its signed copy is uploaded. These are late:
 
-<x-mail::table>
-| Company | Category | Entries | Unbilled Total | Oldest Entry | Days |
-| :--- | :--- | ---: | ---: | :--- | ---: |
-@foreach ($groups as $group)
-| {{ $group['company']->name }} | {{ $group['category']->name }} | {{ $group['count'] }} | {{ number_format($group['total'], 2) }} | {{ $group['oldestEntryDate']->format('M j, Y') }} | {{ $group['daysOutstanding'] }} |
-@endforeach
-</x-mail::table>
+@include('mail.partials.late-bills', ['bills' => $bills])
+
+All amounts are in Taka.
 
 <x-mail::button :url="route('dashboard')">
 Open Dashboard

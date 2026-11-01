@@ -14,20 +14,16 @@ class UnbilledAlertMail extends Mailable
     use Queueable, SerializesModels;
 
     /**
-     * @param  Collection<int, array<string, mixed>>  $groups
+     * @param  Collection<int, array<string, mixed>>  $bills
      */
     public function __construct(
-        public Collection $groups,
+        public Collection $bills,
     ) {}
 
     public function envelope(): Envelope
     {
-        $count = $this->groups->count();
-        $noun = str('group')->plural($count);
-        $verb = $count === 1 ? 'needs' : 'need';
-
         return new Envelope(
-            subject: "Unbilled Alert — {$count} {$noun} {$verb} invoicing",
+            subject: 'Late Bills — '.number_format($this->bills->sum('amount'), 2).' not submitted to the factory',
         );
     }
 
@@ -36,7 +32,7 @@ class UnbilledAlertMail extends Mailable
         return new Content(
             markdown: 'mail.unbilled-alert',
             with: [
-                'groups' => $this->groups,
+                'bills' => $this->bills,
             ],
         );
     }

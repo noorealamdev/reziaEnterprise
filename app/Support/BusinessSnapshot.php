@@ -4,8 +4,11 @@ namespace App\Support;
 
 use App\Models\Company;
 use App\Models\CompanyAgreement;
+use App\Models\Expense;
 use App\Models\Invoice;
 use App\Models\JobEntry;
+use App\Models\SajjatTransaction;
+use App\Models\SalaryPayment;
 use App\Models\ServiceCategory;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -22,6 +25,11 @@ use Illuminate\Support\Collection;
 class BusinessSnapshot
 {
     public const BREAKDOWN_LIMIT = 8;
+
+    /**
+     * A month's bills must reach the factory by this day of the next month.
+     */
+    public const BILL_DEADLINE_DAY = 10;
 
     /**
      * Every job entry not yet attached to an invoice.
@@ -141,7 +149,8 @@ class BusinessSnapshot
      * Not Invoiced (job entries with no invoice yet at all). The categories
      * overlap (Signed isn't mutually exclusive with Paid/Unpaid) rather than
      * summing to one whole, so this is a set of filtered counts, not a
-     * stacked chart.
+     * stacked chart. Past paper bills have no job entries, so their amount is
+     * added on separately, same as billedTotal().
      *
      * @return Collection<int, array{label: string, statusValue: string, count: int, amount: float, color: string}>
      */
@@ -152,21 +161,24 @@ class BusinessSnapshot
                 'label' => 'Paid',
                 'statusValue' => 'paid',
                 'count' => Invoice::where('status', 'paid')->count(),
-                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->where('status', 'paid'))->sum('bill_amount'),
+                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->where('status', 'paid'))->sum('bill_amount')
+                    + (float) Invoice::where('status', 'paid')->sum('manual_amount'),
                 'color' => 'bg-emerald-500',
             ],
             [
                 'label' => 'Unpaid',
                 'statusValue' => 'unpaid',
                 'count' => Invoice::whereIn('status', ['due', 'partial'])->count(),
-                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereIn('status', ['due', 'partial']))->sum('bill_amount'),
+                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereIn('status', ['due', 'partial']))->sum('bill_amount')
+                    + (float) Invoice::whereIn('status', ['due', 'partial'])->sum('manual_amount'),
                 'color' => 'bg-rose-500',
             ],
             [
                 'label' => 'Signed',
                 'statusValue' => 'signed',
                 'count' => Invoice::whereNotNull('signed_copy_path')->count(),
-                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereNotNull('signed_copy_path'))->sum('bill_amount'),
+                'amount' => (float) JobEntry::whereHas('invoice', fn ($query) => $query->whereNotNull('signed_copy_path'))->sum('bill_amount')
+                    + (float) Invoice::whereNotNull('signed_copy_path')->sum('manual_amount'),
                 'color' => 'bg-sky-500',
             ],
             [
@@ -198,9 +210,194 @@ class BusinessSnapshot
             ->get()
             ->map(fn (CompanyAgreement $agreement) => [
                 'agreement' => $agreement,
-                'daysRemaining' => (int) round(now()->diffInDays($agreement->end_date, absolute: true)),
+                'daysRemaining' => (int) now()->startOfDay()->diffInDays($agreement->end_date, absolute: true),
                 'isExpired' => $agreement->is_expired,
             ]);
+    }
+
+    /**
+     * The supply business's profit or loss for each month, from the first
+     * month with job entries. Income is all work done, billed or not, so a
+     * month's result doesn't wait on paperwork. Past paper bills count only
+     * when their cost was recorded: without a cost, their whole amount would
+     * look like profit.
+     *
+     * @return array{months: Collection<int, array{month: Carbon, income: float, vat: float, jobCosts: float, jobProfit: float, salaries: float, expenses: float, sajjat: float, net: float, margin: float, isCurrent: bool}>, total: array{income: float, vat: float, jobCosts: float, jobProfit: float, salaries: float, expenses: float, sajjat: float, net: float, margin: float}, uncountedBillCount: int, uncountedBillAmount: float}
+     */
+    public static function profitAndLoss(): array
+    {
+        $firstDate = JobEntry::min('entry_date');
+        $months = collect();
+
+        if ($firstDate) {
+            $month = Carbon::parse($firstDate)->startOfMonth();
+
+            while ($month->lte(now())) {
+                $months->push($month->copy());
+                $month->addMonthNoOverflow();
+            }
+        }
+
+        $byMonth = fn (Collection $rows, string $dateField) => $rows->groupBy(fn ($row) => $row->{$dateField}->format('Y-m'));
+
+        $entries = $byMonth(JobEntry::get(['entry_date', 'bill_amount', 'cost_amount', 'shipment_tiffin_cost']), 'entry_date');
+        $pastBills = $byMonth(Invoice::whereNotNull('manual_amount')->whereNotNull('manual_cost_amount')->get(['period_start', 'manual_amount', 'manual_cost_amount', 'vat_percent']), 'period_start');
+        $expenses = $byMonth(Expense::get(['expense_date', 'amount']), 'expense_date');
+        $salaries = $byMonth(SalaryPayment::get(['for_month', 'amount']), 'for_month');
+        $sajjat = $byMonth(SajjatTransaction::where('type', SajjatTransaction::TYPE_EXPENSE)->get(['transaction_date', 'amount']), 'transaction_date');
+        $generatedVat = Invoice::whereNull('manual_amount')
+            ->whereNotNull('vat_percent')
+            ->withSum('jobEntries as amount', 'bill_amount')
+            ->get()
+            ->groupBy(fn (Invoice $invoice) => $invoice->statementMonth->format('Y-m'));
+
+        $rows = $months->map(function (Carbon $month) use ($entries, $pastBills, $expenses, $salaries, $sajjat, $generatedVat) {
+            $key = $month->format('Y-m');
+            $monthEntries = $entries->get($key, collect());
+            $monthPastBills = $pastBills->get($key, collect());
+
+            $income = (float) $monthEntries->sum('bill_amount') + (float) $monthPastBills->sum('manual_amount');
+            $vat = (float) $generatedVat->get($key, collect())->sum(fn (Invoice $invoice) => round((float) $invoice->amount * (float) $invoice->vat_percent / 100, 2))
+                + (float) $monthPastBills->sum(fn (Invoice $invoice) => round((float) $invoice->manual_amount * (float) $invoice->vat_percent / 100, 2));
+            $jobCosts = (float) $monthEntries->sum(fn (JobEntry $entry) => (float) $entry->cost_amount + (float) $entry->shipment_tiffin_cost)
+                + (float) $monthPastBills->sum('manual_cost_amount');
+
+            return self::profitAndLossRow([
+                'month' => $month,
+                'income' => $income,
+                'vat' => $vat,
+                'jobCosts' => $jobCosts,
+                'salaries' => (float) $salaries->get($key, collect())->sum('amount'),
+                'expenses' => (float) $expenses->get($key, collect())->sum('amount'),
+                'sajjat' => (float) $sajjat->get($key, collect())->sum('amount'),
+                'isCurrent' => $month->isSameMonth(now()),
+            ]);
+        });
+
+        $uncounted = Invoice::whereNotNull('manual_amount')->whereNull('manual_cost_amount');
+
+        return [
+            'months' => $rows->reverse()->values(),
+            'total' => self::profitAndLossRow([
+                'income' => $rows->sum('income'),
+                'vat' => $rows->sum('vat'),
+                'jobCosts' => $rows->sum('jobCosts'),
+                'salaries' => $rows->sum('salaries'),
+                'expenses' => $rows->sum('expenses'),
+                'sajjat' => $rows->sum('sajjat'),
+            ]),
+            'uncountedBillCount' => (clone $uncounted)->count(),
+            'uncountedBillAmount' => (float) (clone $uncounted)->sum('manual_amount'),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    private static function profitAndLossRow(array $row): array
+    {
+        $jobProfit = round($row['income'] - $row['vat'] - $row['jobCosts'], 2);
+        $net = round($jobProfit - $row['salaries'] - $row['expenses'] - $row['sajjat'], 2);
+
+        return [...$row, 'jobProfit' => $jobProfit, 'net' => $net, 'margin' => $row['income'] > 0 ? round($net / $row['income'] * 100, 1) : 0.0];
+    }
+
+    /**
+     * Bills that should have reached the factory by now and haven't. A month's
+     * bills are due by the 10th of the next month, and a bill counts as
+     * submitted once its signed copy is on file, the same proof Bill Statement
+     * uses. Past paper bills are left out: they predate this rule.
+     *
+     * @return Collection<int, array{company: Company, category: ServiceCategory, month: Carbon, deadline: Carbon, daysLate: int, amount: float, invoice: ?Invoice}>
+     */
+    public static function billsNotSubmitted(): Collection
+    {
+        $notGenerated = JobEntry::whereNull('invoice_id')
+            ->with(['company', 'serviceCategory'])
+            ->get()
+            ->groupBy(fn (JobEntry $entry) => $entry->company_id.'-'.$entry->service_category_id.'-'.self::billingMonth($entry)->format('Y-m'))
+            ->map(fn (Collection $entries) => [
+                'company' => $entries->first()->company,
+                'category' => $entries->first()->serviceCategory,
+                'month' => self::billingMonth($entries->first()),
+                'amount' => (float) $entries->sum('bill_amount'),
+                'invoice' => null,
+            ]);
+
+        $notSigned = Invoice::whereNull('manual_amount')
+            ->whereNull('signed_copy_path')
+            ->with(['company', 'serviceCategory'])
+            ->withSum('jobEntries as amount', 'bill_amount')
+            ->get()
+            ->map(fn (Invoice $invoice) => [
+                'company' => $invoice->company,
+                'category' => $invoice->serviceCategory,
+                'month' => $invoice->statementMonth->copy()->startOfMonth(),
+                'amount' => (float) $invoice->amount,
+                'invoice' => $invoice,
+            ]);
+
+        return $notGenerated->values()->concat($notSigned)
+            ->filter(fn (array $bill) => $bill['amount'] > 0)
+            ->map(function (array $bill) {
+                $deadline = self::billDeadline($bill['month']);
+
+                return [...$bill, 'deadline' => $deadline, 'daysLate' => (int) $deadline->diffInDays(now()->startOfDay())];
+            })
+            ->filter(fn (array $bill) => now()->startOfDay()->gt($bill['deadline']))
+            ->sort(fn (array $a, array $b) => ($b['daysLate'] <=> $a['daysLate']) ?: ($b['amount'] <=> $a['amount']))
+            ->values();
+    }
+
+    /**
+     * What's coming up: the last ended month's work not yet on an invoice, while
+     * its deadline hasn't passed.
+     *
+     * @return array{month: Carbon, deadline: Carbon, count: int, amount: float}|null
+     */
+    public static function billsDueSoon(): ?array
+    {
+        $month = now()->startOfMonth()->subMonthNoOverflow();
+        $deadline = self::billDeadline($month);
+
+        if (now()->startOfDay()->gt($deadline)) {
+            return null;
+        }
+
+        $entries = JobEntry::whereNull('invoice_id')
+            ->with('company')
+            ->get()
+            ->filter(fn (JobEntry $entry) => self::billingMonth($entry)->isSameMonth($month) && (float) $entry->bill_amount > 0);
+
+        if ($entries->isEmpty()) {
+            return null;
+        }
+
+        return [
+            'month' => $month,
+            'deadline' => $deadline,
+            'count' => $entries->groupBy(fn (JobEntry $entry) => $entry->company_id.'-'.$entry->service_category_id)->count(),
+            'amount' => (float) $entries->sum('bill_amount'),
+        ];
+    }
+
+    private static function billDeadline(Carbon $month): Carbon
+    {
+        return $month->copy()->startOfMonth()->addMonthNoOverflow()->day(self::BILL_DEADLINE_DAY)->startOfDay();
+    }
+
+    /**
+     * Progress Apparels bills from the 25th to the 25th, so its work after the
+     * 25th belongs to the next month's bill, not this one.
+     */
+    private static function billingMonth(JobEntry $entry): Carbon
+    {
+        $month = $entry->entry_date->copy()->startOfMonth();
+
+        return $entry->company->code === 'PAL' && $entry->entry_date->day > 25
+            ? $month->addMonthNoOverflow()
+            : $month;
     }
 
     /**

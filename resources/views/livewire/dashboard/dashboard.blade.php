@@ -101,6 +101,9 @@ new class extends Component
             'dailyExpenseTrend' => $this->dailyExpenseTrend(),
             'invoiceOverview' => $invoiceOverview,
             'agreementDeadlines' => BusinessSnapshot::agreementDeadlines(self::BREAKDOWN_LIMIT),
+            'billsNotSubmitted' => BusinessSnapshot::billsNotSubmitted(),
+            'billsDueSoon' => BusinessSnapshot::billsDueSoon(),
+            'profitAndLoss' => BusinessSnapshot::profitAndLoss(),
             ...BusinessSnapshot::companiesFinancials($this->profitCompanyFilter, $this->profitYearFilter, $this->profitMonthFilter),
         ];
     }
@@ -198,6 +201,152 @@ new class extends Component
 }; ?>
 
 <div class="space-y-6">
+    @can('dashboard.view')
+        @if ($billsNotSubmitted->isNotEmpty())
+            <div id="bills-not-submitted" class="rounded-xl border border-red-300 bg-red-50 p-4 shadow-sm dark:border-red-900 dark:bg-red-900/20">
+                <div class="flex flex-wrap items-baseline justify-between gap-2">
+                    <h2 class="text-base font-semibold text-red-800 dark:text-red-200">
+                        Bills not submitted to the factory
+                    </h2>
+                    <span class="text-sm font-semibold text-red-800 dark:text-red-200">{{ number_format($billsNotSubmitted->sum('amount'), 2) }}</span>
+                </div>
+                <p class="text-xs text-red-700 dark:text-red-300">A month's bills are due by the {{ \App\Support\BusinessSnapshot::BILL_DEADLINE_DAY }}th of the next month. A bill counts as submitted once its signed copy is uploaded.</p>
+
+                <div class="mt-3 max-h-72 divide-y divide-red-200 overflow-y-auto rounded-lg border border-red-200 bg-white dark:divide-red-900/60 dark:border-red-900/60 dark:bg-slate-800">
+                    @foreach ($billsNotSubmitted as $bill)
+                        <div class="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                            <div class="min-w-0">
+                                <span class="font-semibold text-slate-900 dark:text-white">{{ $bill['company']->name }}</span>
+                                <span class="text-slate-500 dark:text-slate-400">· {{ $bill['category']->name }} · {{ $bill['month']->format('F Y') }}</span>
+                                <span class="block text-xs text-red-700 dark:text-red-300">
+                                    {{ $bill['invoice'] ? 'Generated, no signed copy' : 'Not generated' }} · {{ $bill['daysLate'] }} {{ Str::plural('day', $bill['daysLate']) }} late
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($bill['amount'], 2) }}</span>
+                                @if ($bill['invoice'])
+                                    @can('invoices.view')
+                                        <a href="{{ route('invoices.show', $bill['invoice']) }}" wire:navigate class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400">View Bill</a>
+                                    @endcan
+                                @else
+                                    @can('invoices.create')
+                                        <a href="{{ route('invoices.create', ['company' => $bill['company']->id, 'category' => $bill['category']->id, 'period' => $bill['month']->format('Y-m')]) }}" wire:navigate class="text-xs font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400">Generate</a>
+                                    @endcan
+                                @endif
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </div>
+        @endif
+
+        @if ($billsDueSoon)
+            <div id="bills-due-soon" class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 shadow-sm dark:border-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
+                <span>
+                    <span class="font-semibold">{{ $billsDueSoon['month']->format('F') }} bills are due by {{ $billsDueSoon['deadline']->format('j F') }}.</span>
+                    {{ $billsDueSoon['count'] }} {{ Str::plural('service', $billsDueSoon['count']) }} still to bill.
+                </span>
+                <span class="font-semibold">{{ number_format($billsDueSoon['amount'], 2) }}</span>
+            </div>
+        @endif
+    @endcan
+
+    @can('dashboard.view_profit')
+        @php
+            $lastFullMonth = $profitAndLoss['months']->firstWhere('isCurrent', false);
+            $thisMonth = $profitAndLoss['months']->firstWhere('isCurrent', true);
+            $resultColor = fn (float $net): string => $net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400';
+        @endphp
+        <div id="profit-and-loss" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <h2 class="text-base font-semibold text-slate-900 dark:text-white">Profit &amp; Loss</h2>
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">The supply business, month by month: all work done, less VAT, job costs, salaries and running costs.</p>
+
+            <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                @foreach ([
+                    [$lastFullMonth ? 'Last month — '.$lastFullMonth['month']->format('F Y') : 'Last month', $lastFullMonth],
+                    [$thisMonth ? 'This month so far — '.$thisMonth['month']->format('F Y') : 'This month so far', $thisMonth],
+                    ['All months together', $profitAndLoss['total']],
+                ] as [$label, $period])
+                    <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ $label }}</p>
+                        @if ($period)
+                            <p class="mt-1 text-2xl font-semibold {{ $resultColor($period['net']) }}">
+                                {{ $period['net'] >= 0 ? 'Profit' : 'Loss' }} {{ number_format(abs($period['net']), 2) }}
+                            </p>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ number_format($period['margin'], 1) }}% of {{ number_format($period['income'], 2) }} income</p>
+                        @else
+                            <p class="mt-1 text-sm text-slate-400 dark:text-slate-500">Nothing recorded yet.</p>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+
+            @if ($profitAndLoss['months']->isNotEmpty())
+                <div class="mt-4 overflow-x-auto">
+                    <table class="w-full min-w-[880px] text-sm">
+                        <thead>
+                            <tr class="border-b border-slate-200 text-right text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                                <th class="px-3 py-2 text-left">Month</th>
+                                <th class="px-3 py-2">Income</th>
+                                <th class="px-3 py-2">VAT</th>
+                                <th class="px-3 py-2">Job Costs</th>
+                                <th class="px-3 py-2">Job Profit</th>
+                                <th class="px-3 py-2">Salaries</th>
+                                <th class="px-3 py-2">Expenses</th>
+                                <th class="px-3 py-2">Sajjat</th>
+                                <th class="px-3 py-2">Profit / Loss</th>
+                                <th class="px-3 py-2">Margin</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach ($profitAndLoss['months'] as $row)
+                                <tr class="border-b border-slate-100 text-right text-slate-600 last:border-0 dark:border-slate-700/50 dark:text-slate-400">
+                                    <td class="whitespace-nowrap px-3 py-2 text-left font-medium text-slate-900 dark:text-white">
+                                        {{ $row['month']->format('F Y') }}
+                                        @if ($row['isCurrent'])
+                                            <span class="text-xs font-normal text-slate-400 dark:text-slate-500">so far</span>
+                                        @endif
+                                    </td>
+                                    <td class="px-3 py-2">{{ number_format($row['income'], 2) }}</td>
+                                    <td class="px-3 py-2">{{ number_format($row['vat'], 2) }}</td>
+                                    <td class="px-3 py-2">{{ number_format($row['jobCosts'], 2) }}</td>
+                                    <td class="px-3 py-2 font-medium {{ $resultColor($row['jobProfit']) }}">{{ number_format($row['jobProfit'], 2) }}</td>
+                                    <td class="px-3 py-2">{{ number_format($row['salaries'], 2) }}</td>
+                                    <td class="px-3 py-2">{{ number_format($row['expenses'], 2) }}</td>
+                                    <td class="px-3 py-2">{{ number_format($row['sajjat'], 2) }}</td>
+                                    <td class="px-3 py-2 font-semibold {{ $resultColor($row['net']) }}">{{ number_format($row['net'], 2) }}</td>
+                                    <td class="px-3 py-2 {{ $resultColor($row['net']) }}">{{ number_format($row['margin'], 1) }}%</td>
+                                </tr>
+                            @endforeach
+                        </tbody>
+                        <tfoot>
+                            <tr class="border-t border-slate-200 text-right font-semibold text-slate-900 dark:border-slate-700 dark:text-white">
+                                <td class="px-3 py-2 text-left">Total</td>
+                                <td class="px-3 py-2">{{ number_format($profitAndLoss['total']['income'], 2) }}</td>
+                                <td class="px-3 py-2">{{ number_format($profitAndLoss['total']['vat'], 2) }}</td>
+                                <td class="px-3 py-2">{{ number_format($profitAndLoss['total']['jobCosts'], 2) }}</td>
+                                <td class="px-3 py-2 {{ $resultColor($profitAndLoss['total']['jobProfit']) }}">{{ number_format($profitAndLoss['total']['jobProfit'], 2) }}</td>
+                                <td class="px-3 py-2">{{ number_format($profitAndLoss['total']['salaries'], 2) }}</td>
+                                <td class="px-3 py-2">{{ number_format($profitAndLoss['total']['expenses'], 2) }}</td>
+                                <td class="px-3 py-2">{{ number_format($profitAndLoss['total']['sajjat'], 2) }}</td>
+                                <td class="px-3 py-2 {{ $resultColor($profitAndLoss['total']['net']) }}">{{ number_format($profitAndLoss['total']['net'], 2) }}</td>
+                                <td class="px-3 py-2 {{ $resultColor($profitAndLoss['total']['net']) }}">{{ number_format($profitAndLoss['total']['margin'], 1) }}%</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+            @endif
+
+            <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                Job Profit is income less VAT and job costs; Profit / Loss then takes off salaries, expenses and Sajjat. Income counts all work, billed or not. VAT is only counted once a bill is generated, so recent months can drop a little.
+                @if ($profitAndLoss['uncountedBillCount'] > 0)
+                    Not counted: {{ $profitAndLoss['uncountedBillCount'] }} past paper {{ Str::plural('bill', $profitAndLoss['uncountedBillCount']) }} ({{ number_format($profitAndLoss['uncountedBillAmount'], 2) }}) with no cost recorded, because their profit can't be worked out.
+                @endif
+                Canteen and Egg Sales are separate and not included.
+            </p>
+        </div>
+    @endcan
+
     @can('dashboard.view')
     <div>
         <div class="flex flex-wrap items-baseline justify-between gap-2 px-1">
@@ -358,7 +507,7 @@ new class extends Component
         <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div>
                 <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300">Invoice Overview</h3>
-                <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">Invoices already sent to the factory, broken down by whether they've paid.</p>
+                <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">Invoices already sent to the factory, broken down by whether they've paid. Amounts are full bill values, before VAT is taken off.</p>
             </div>
             @can('bill_statement.view')
                 <span class="text-xs text-slate-400 dark:text-slate-500">Click a card to view those bills</span>

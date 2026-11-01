@@ -24,7 +24,7 @@ class DailyReportMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Daily Report — '.$this->date->format('M j, Y'),
+            subject: 'Daily Report — '.$this->date->format('M j, Y').($this->data['billsNotSubmitted']->isNotEmpty() ? ' — bills late' : ''),
         );
     }
 

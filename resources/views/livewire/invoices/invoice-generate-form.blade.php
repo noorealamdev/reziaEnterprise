@@ -4,6 +4,7 @@ use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
+use App\Support\TiffinBilling;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -88,7 +89,7 @@ new class extends Component
 
         $oldestUnbilledDate = JobEntry::where('company_id', $this->company_id)
             ->where('service_category_id', $this->service_category_id)
-            ->when($this->tiffin_department_id, fn ($query, $departmentId) => $query->where('tiffin_department_id', $departmentId))
+            ->when($this->selectedDepartmentIds(), fn ($query, $departmentIds) => $query->whereIn('tiffin_department_id', $departmentIds))
             ->when($this->selectedMonth(), fn ($query, $month) => $query
                 ->whereDate('entry_date', '>=', $month[0]->toDateString())
                 ->whereDate('entry_date', '<=', $month[1]->toDateString()))
@@ -155,7 +156,7 @@ new class extends Component
     {
         return JobEntry::where('company_id', $this->company_id)
             ->where('service_category_id', $this->service_category_id)
-            ->when($this->tiffin_department_id, fn ($query, $departmentId) => $query->where('tiffin_department_id', $departmentId))
+            ->when($this->selectedDepartmentIds(), fn ($query, $departmentIds) => $query->whereIn('tiffin_department_id', $departmentIds))
             ->whereDate('entry_date', '>=', $dates[0]->toDateString())
             ->whereDate('entry_date', '<=', $dates[1]->toDateString())
             ->whereNull('invoice_id');
@@ -252,7 +253,39 @@ new class extends Component
             return collect();
         }
 
-        return $company?->tiffinDepartments()->orderBy('name')->get() ?? collect();
+        $departments = $company?->tiffinDepartments()->orderBy('name')->get() ?? collect();
+
+        if ($categoryName !== 'Tiffin' || ! TiffinBilling::washDepartmentIds($company)) {
+            return $departments;
+        }
+
+        // Ananta's two Wash departments are one bill, so they are one choice.
+        return $departments
+            ->reject(fn ($department) => $department->name === TiffinBilling::WASH_STAFF)
+            ->each(function ($department) {
+                if ($department->name === TiffinBilling::WASH_WORKER) {
+                    $department->name = 'Wash (Worker + Staff)';
+                }
+            })
+            ->values();
+    }
+
+    /**
+     * The departments this bill covers: the one chosen, or both of Ananta's
+     * Wash departments together.
+     *
+     * @return array<int, int>
+     */
+    private function selectedDepartmentIds(): array
+    {
+        if (! $this->tiffin_department_id) {
+            return [];
+        }
+
+        $isTiffin = ServiceCategory::find($this->service_category_id)?->name === 'Tiffin';
+        $washIds = $isTiffin ? TiffinBilling::washDepartmentIds(Company::find($this->company_id)) : [];
+
+        return in_array($this->tiffin_department_id, $washIds, true) ? $washIds : [$this->tiffin_department_id];
     }
 
     /**
@@ -290,7 +323,7 @@ new class extends Component
         $periodOptions = ($this->company_id && $this->service_category_id && (! $requiresDepartment || $this->tiffin_department_id))
             ? JobEntry::where('company_id', $this->company_id)
                 ->where('service_category_id', $this->service_category_id)
-                ->when($requiresDepartment, fn ($query) => $query->where('tiffin_department_id', $this->tiffin_department_id))
+                ->when($requiresDepartment, fn ($query) => $query->whereIn('tiffin_department_id', $this->selectedDepartmentIds()))
                 ->get(['entry_date'])
                 ->map(fn (JobEntry $entry) => $entry->entry_date->format('Y-m'))
                 ->unique()
@@ -320,23 +353,26 @@ new class extends Component
                     )
                     ->when($requiresDepartment, fn ($query) => $query->whereHas(
                         'jobEntries',
-                        fn ($entryQuery) => $entryQuery->where('tiffin_department_id', $this->tiffin_department_id)
+                        fn ($entryQuery) => $entryQuery->whereIn('tiffin_department_id', $this->selectedDepartmentIds())
                     ))
                     ->get(),
             ];
         }
 
+        $departmentFieldLabel = $this->departmentFieldLabel();
+
         return [
             'companies' => Company::orderBy('name')->get(),
             'serviceCategories' => $serviceCategories,
             'tiffinDepartments' => $tiffinDepartments,
-            'departmentFieldLabel' => $this->departmentFieldLabel(),
+            'departmentFieldLabel' => $departmentFieldLabel,
             'periodOptions' => $periodOptions,
             'preview' => $preview,
             'isProgressApparels' => $this->isProgressApparels(),
             'usesCustomDates' => $usesCustomDates,
             'isReadyForDates' => $isReadyForDates,
             'datesAreInvalid' => $usesCustomDates && $isReadyForDates && ! $selectedDates,
+            'hasCombinedWash' => $departmentFieldLabel === 'Tiffin Department' && TiffinBilling::washDepartmentIds($company) !== [],
         ];
     }
 }; ?>
@@ -379,7 +415,9 @@ new class extends Component
                 @endforeach
             </x-select-input>
             <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
-                @if ($departmentFieldLabel === 'Unit')
+                @if ($hasCombinedWash)
+                    Swing gets its own invoice. Wash Worker and Wash Staff go on one bill together.
+                @elseif ($departmentFieldLabel === 'Unit')
                     Simba Fashion bills Daily Basic Labour separately per unit — each unit gets its own
                     invoice, never combined into one.
                 @else

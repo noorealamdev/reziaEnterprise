@@ -25,5 +25,19 @@
 }
 
 @page {
-    margin: 2mm 12mm 12mm 12mm;
+    margin: 10mm 12mm 12mm 12mm;
+}
+
+@page :first {
+    margin-top: 2mm;
+}
+
+@media print {
+    tr {
+        break-inside: avoid;
+    }
+
+    tfoot {
+        display: table-row-group;
+    }
 }

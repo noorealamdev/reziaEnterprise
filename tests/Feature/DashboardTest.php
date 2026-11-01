@@ -1009,3 +1009,20 @@ test('a user without expenses view permission does not see the daily expense cha
         ->assertOk()
         ->assertDontSee('Last 14 Days');
 });
+
+test('invoice overview includes past paper bills, which have no job entries', function () {
+    $user = User::factory()->create();
+    $company = Company::factory()->create();
+    $category = makeServiceCategory('Daily Basic Labour');
+
+    Invoice::create(['company_id' => $company->id, 'service_category_id' => $category->id, 'invoice_number' => 'PAST-PAID', 'period_start' => '2026-01-01', 'period_end' => '2026-01-31', 'status' => 'paid', 'manual_amount' => 5000]);
+    Invoice::create(['company_id' => $company->id, 'service_category_id' => $category->id, 'invoice_number' => 'PAST-PARTIAL', 'period_start' => '2026-01-01', 'period_end' => '2026-01-31', 'status' => 'partial', 'manual_amount' => 3000, 'signed_copy_path' => 'signed-invoices/past.pdf']);
+
+    $this->actingAs($user);
+
+    $rows = Volt::test('dashboard.dashboard')->viewData('invoiceOverview')->keyBy('label');
+
+    expect($rows['Paid']['amount'])->toBe(5000.0);
+    expect($rows['Unpaid']['amount'])->toBe(3000.0);
+    expect($rows['Signed']['amount'])->toBe(3000.0);
+});

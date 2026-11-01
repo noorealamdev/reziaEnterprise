@@ -5,6 +5,7 @@ use App\Models\JobEntry;
 use App\Models\ServiceCategory;
 use App\Models\TiffinDepartment;
 use App\Models\TiffinItemPurchase;
+use App\Support\TiffinBilling;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Livewire\Volt\Component;
@@ -148,8 +149,7 @@ new class extends Component
             $rules["quantities.{$itemName}"] = ['required', 'numeric', 'min:0'];
             $rules["costRates.{$itemName}"] = ['required', 'numeric', 'min:0'];
 
-            // Only Egg bills — the whole meal is one fixed rate per person.
-            if ($itemName === 'Egg') {
+            if (TiffinBilling::billsItem($this->company, $this->department->name, $itemName)) {
                 $rules["billRates.{$itemName}"] = ['required', 'numeric', 'min:0'];
             }
         }
@@ -164,7 +164,7 @@ new class extends Component
                 $isEgg = $itemName === 'Egg';
                 $headcountOrQty = (float) $this->quantities[$itemName];
                 $storedQuantity = ($isEgg && $this->carriesEggBuffer) ? $headcountOrQty + config('tiffin.egg_buffer_quantity') : $headcountOrQty;
-                $billRate = $isEgg ? (float) ($this->billRates[$itemName] ?? 0) : 0.0;
+                $billRate = TiffinBilling::billsItem($this->company, $this->department->name, $itemName) ? (float) ($this->billRates[$itemName] ?? 0) : 0.0;
 
                 // A disabled input isn't a security boundary — re-check
                 // authoritatively at save time, same as the create path.
@@ -257,7 +257,7 @@ new class extends Component
                         <x-text-input wire:model="costRates.{{ $itemName }}" :id="'cost_'.$itemName" type="number" step="0.01" min="0" class="mt-1 block w-full text-sm" :disabled="(bool) ($purchaseLocks[$itemName] ?? null)" />
                         <x-input-error :messages="$errors->get('costRates.'.$itemName)" class="mt-1" />
                     </div>
-                    @if ($itemName === 'Egg')
+                    @if (\App\Support\TiffinBilling::billsItem($company, $department->name, $itemName))
                         <div>
                             <x-input-label :for="'bill_'.$itemName" value="Bill Rate" class="!mb-0 text-xs" />
                             <x-text-input wire:model="billRates.{{ $itemName }}" :id="'bill_'.$itemName" type="number" step="0.01" min="0" class="mt-1 block w-full text-sm" />

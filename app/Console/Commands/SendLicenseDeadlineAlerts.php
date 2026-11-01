@@ -55,7 +55,7 @@ class SendLicenseDeadlineAlerts extends Command
 
         $mailLicenses = $licenses->map(fn (License $license) => [
             'license' => $license,
-            'daysRemaining' => (int) round(now()->diffInDays($license->expiry_date, absolute: true)),
+            'daysRemaining' => (int) now()->startOfDay()->diffInDays($license->expiry_date, absolute: true),
         ]);
 
         foreach ($recipients as $recipient) {

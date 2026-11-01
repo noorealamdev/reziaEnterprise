@@ -7,6 +7,7 @@ use App\Models\ServiceCategory;
 use App\Models\TiffinDepartmentItem;
 use App\Models\TiffinItem;
 use App\Models\TiffinItemPurchase;
+use App\Support\TiffinBilling;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
@@ -335,6 +336,11 @@ new class extends Component
             ->values();
     }
 
+    private function billsItem(string $departmentName, string $itemName): bool
+    {
+        return TiffinBilling::billsItem(Company::find($this->company_id), $departmentName, $itemName);
+    }
+
     /**
      * Which department absorbs the Egg buffer — the client sends +5 extra
      * eggs once for the whole company's delivery that day, not once per
@@ -376,13 +382,17 @@ new class extends Component
                 $this->batchQuantities[$department->id][$item->name] = '';
                 $this->batchCostRates[$department->id][$item->name] = $recent ? (string) $recent->cost_rate : '';
 
-                // Only Egg bills — the whole Tiffin meal is a fixed rate per
-                // person (Egg's quantity), not a rate per ingredient.
-                // Banana/Bread never get a batchBillRates entry at all.
+                // Egg bills the whole Tiffin meal at a fixed rate per person
+                // (Egg's quantity), so Banana/Bread get no batchBillRates entry
+                // — except where a department bills per item (Wash Worker).
                 if ($item->name === 'Egg') {
                     $this->batchBillRates[$department->id][$item->name] = $company?->tiffin_bill_rate !== null
                         ? (string) $company->tiffin_bill_rate
                         : ($recent ? (string) $recent->bill_rate : '');
+                } elseif ($this->billsItem($department->name, $item->name)) {
+                    $this->batchBillRates[$department->id][$item->name] = (string) ($recent && (float) $recent->bill_rate > 0
+                        ? (float) $recent->bill_rate
+                        : TiffinBilling::defaultItemRate($department->name, $item->name));
                 }
             }
 
@@ -650,9 +660,8 @@ new class extends Component
                 $rules["batchQuantities.{$department->id}.{$item->name}"] = ['required', 'numeric', 'min:0'];
                 $rules["batchCostRates.{$department->id}.{$item->name}"] = ['required', 'numeric', 'min:0'];
 
-                // Only Egg bills — the whole meal is one fixed rate per person.
-                if ($item->name === 'Egg') {
-                    $rules["batchBillRates.{$department->id}.Egg"] = ['required', 'numeric', 'min:0'];
+                if ($this->billsItem($department->name, $item->name)) {
+                    $rules["batchBillRates.{$department->id}.{$item->name}"] = ['required', 'numeric', 'min:0'];
                 }
             }
 
@@ -711,9 +720,12 @@ new class extends Component
                 $purchase = TiffinItemPurchase::findFor($item->name, $this->entry_date);
                 $costRate = $purchase ? (float) $purchase->sale_rate : (float) $this->batchCostRates[$department->id][$item->name];
 
-                // Only Egg's row carries a bill — Banana/Bread (and any
-                // exchange item) are cost-tracking only.
-                $billRate = $isEgg ? (float) $this->batchBillRates[$department->id]['Egg'] : 0.0;
+                // Egg's row carries the bill — Banana/Bread (and any exchange
+                // item) are cost-tracking only, unless the department bills
+                // per item.
+                $billRate = $this->billsItem($department->name, $item->name)
+                    ? (float) $this->batchBillRates[$department->id][$item->name]
+                    : 0.0;
 
                 $rows[] = [
                     'tiffin_department_id' => $department->id,
@@ -904,7 +916,8 @@ new class extends Component
                 $qty = $this->batchQuantities[$department->id][$item->name] ?? '';
                 $costRate = $this->batchCostRates[$department->id][$item->name] ?? '';
                 $isEgg = $item->name === 'Egg';
-                $billRate = $isEgg ? ($this->batchBillRates[$department->id]['Egg'] ?? '') : null;
+                $bills = $this->billsItem($department->name, $item->name);
+                $billRate = $bills ? ($this->batchBillRates[$department->id][$item->name] ?? '') : null;
                 $purchase = $this->entry_date ? TiffinItemPurchase::findFor($item->name, $this->entry_date) : null;
                 $appliesEggBuffer = $isEgg && $department->id === $eggBufferDepartmentId;
 
@@ -916,12 +929,12 @@ new class extends Component
 
                 return (object) [
                     'name' => $item->name,
-                    'bills' => $isEgg,
+                    'bills' => $bills,
                     'isEgg' => $isEgg,
                     'actualEggQuantity' => ($appliesEggBuffer && is_numeric($qty)) ? (float) $qty + $eggBuffer : null,
                     'bufferAppliesElsewhere' => ($isEgg && ! $appliesEggBuffer && $eggBufferDepartmentName) ? $eggBufferDepartmentName : null,
                     'costAmount' => (is_numeric($qty) && is_numeric($costRate)) ? round((float) $costQty * (float) $costRate, 2) : null,
-                    'billAmount' => ($isEgg && is_numeric($qty) && is_numeric($billRate)) ? round((float) $qty * (float) $billRate, 2) : null,
+                    'billAmount' => ($bills && is_numeric($qty) && is_numeric($billRate)) ? round((float) $qty * (float) $billRate, 2) : null,
                     'locked' => $purchase !== null,
                     'purchase' => $purchase,
                 ];
@@ -1148,14 +1161,14 @@ new class extends Component
                                             </div>
                                             @if ($item->bills)
                                                 <div>
-                                                    <x-input-label for="batch_bill_egg" value="Bill Rate" class="!mb-0 text-xs" />
+                                                    <x-input-label :for="'batch_bill_'.$department->id.'_'.$item->name" value="Bill Rate" class="!mb-0 text-xs" />
                                                     <x-text-input
-                                                        wire:model.live.debounce.400ms="batchBillRates.{{ $department->id }}.Egg"
-                                                        id="batch_bill_egg"
+                                                        wire:model.live.debounce.400ms="batchBillRates.{{ $department->id }}.{{ $item->name }}"
+                                                        :id="'batch_bill_'.$department->id.'_'.$item->name"
                                                         type="number" step="0.01" min="0" placeholder="e.g. 30.00"
                                                         class="mt-1 block w-full text-sm"
                                                     />
-                                                    <x-input-error :messages="$errors->get('batchBillRates.'.$department->id.'.Egg')" class="mt-1" />
+                                                    <x-input-error :messages="$errors->get('batchBillRates.'.$department->id.'.'.$item->name)" class="mt-1" />
                                                 </div>
                                             @endif
                                         </div>

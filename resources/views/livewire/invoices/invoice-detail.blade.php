@@ -3,6 +3,8 @@
 use App\Models\CompanyPurchase;
 use App\Models\Invoice;
 use App\Support\NumberToWords;
+use App\Support\TiffinBilling;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
@@ -261,6 +263,58 @@ new class extends Component
         $this->redirect(route('bill-statement.index', ['company' => $companyId]), navigate: true);
     }
 
+    /**
+     * Ananta's Wash bill, laid out like the copy sent to the factory: one row
+     * per day with the Worker item and the Staff meal side by side. Null for
+     * every other invoice.
+     *
+     * @return array{rows: Collection, workerQuantity: float, workerPrice: float, staffQuantity: float, staffPrice: float, total: float}|null
+     */
+    private function washBill(Collection $entries): ?array
+    {
+        $isWash = $this->invoice->company->code === 'AAL'
+            && $this->invoice->serviceCategory->name === 'Tiffin'
+            && $entries->contains(fn ($entry) => $entry->tiffinDepartment?->name === TiffinBilling::WASH_WORKER);
+
+        if (! $isWash) {
+            return null;
+        }
+
+        $rows = $entries->groupBy(fn ($entry) => $entry->entry_date->toDateString())->flatMap(function (Collection $day) {
+            $billed = $day->filter(fn ($entry) => (float) $entry->bill_amount > 0);
+            $workers = $billed->filter(fn ($entry) => $entry->tiffinDepartment?->name === TiffinBilling::WASH_WORKER)->values();
+            $staff = $billed->first(fn ($entry) => $entry->tiffinDepartment?->name === TiffinBilling::WASH_STAFF);
+            $staffPrice = (float) ($staff?->bill_amount ?? 0);
+            $staffRate = (float) ($staff?->bill_rate ?? 0);
+
+            return collect(range(0, max(0, $workers->count() - 1)))->map(function (int $line) use ($day, $workers, $staff, $staffPrice, $staffRate) {
+                $worker = $workers->get($line);
+                $hasStaff = $line === 0 && $staff !== null;
+
+                return (object) [
+                    'date' => $line === 0 ? $day->first()->entry_date : null,
+                    'workerItem' => $worker?->supply_type,
+                    'workerQuantity' => (float) ($worker?->quantity ?? 0),
+                    'workerRate' => (float) ($worker?->bill_rate ?? 0),
+                    'workerPrice' => (float) ($worker?->bill_amount ?? 0),
+                    'staffQuantity' => $hasStaff && $staffRate > 0 ? round($staffPrice / $staffRate, 2) : 0.0,
+                    'staffRate' => $hasStaff ? $staffRate : 0.0,
+                    'staffPrice' => $hasStaff ? $staffPrice : 0.0,
+                    'total' => (float) ($worker?->bill_amount ?? 0) + ($hasStaff ? $staffPrice : 0.0),
+                ];
+            });
+        })->values();
+
+        return [
+            'rows' => $rows,
+            'workerQuantity' => (float) $rows->sum('workerQuantity'),
+            'workerPrice' => (float) $rows->sum('workerPrice'),
+            'staffQuantity' => (float) $rows->sum('staffQuantity'),
+            'staffPrice' => (float) $rows->sum('staffPrice'),
+            'total' => (float) $rows->sum('total'),
+        ];
+    }
+
     public function with(): array
     {
         $isManual = $this->invoice->manual_amount !== null;
@@ -339,6 +393,8 @@ new class extends Component
                 ])->values();
         }
 
+        $washBill = $isManual ? null : $this->washBill($entries);
+
         // Simba Fashion's per-unit Daily Basic Labour invoices are already
         // scoped to a single unit at generation time (every entry on this
         // invoice shares the same tiffin_department_id) — shown on the
@@ -413,6 +469,7 @@ new class extends Component
 
         return [
             'rows' => $rows,
+            'washBill' => $washBill,
             'unitLabel' => $this->invoice->serviceCategory->unit_label,
             'invoiceUnit' => $invoiceUnit,
             'totalCostAmount' => $totalCostAmount,
@@ -619,12 +676,12 @@ new class extends Component
     </x-modal>
 
     {{-- The printable document — what actually gets handed to the factory. --}}
-    <div class="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-800 print:!mt-0 print:border-0 print:p-0 print:shadow-none">
+    <div class="relative overflow-hidden rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-800 print:!mt-0 print:overflow-visible print:border-0 print:p-0 print:shadow-none">
         {{-- A faint, oversized watermark behind the whole document — reads as an
         official/original document rather than a plain printout. An <img>/<svg>
         element (not a CSS background-image) so it still prints even when the
         browser's own "background graphics" print setting is off. --}}
-        <div class="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden select-none">
+        <div class="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden select-none print:fixed">
             <x-application-logo class="h-96 w-96 grayscale opacity-5 print:opacity-10" />
         </div>
 
@@ -639,8 +696,8 @@ new class extends Component
             <p class="text-sm text-slate-600 dark:text-slate-400">{{ config('company.address') }}</p>
         </div>
 
-        <div class="mt-6 flex flex-wrap items-start justify-between gap-4 text-sm">
-            <div class="space-y-1">
+        <div class="{{ $washBill ? 'print:mt-2' : '' }} mt-6 flex flex-wrap items-start justify-between gap-4 text-sm">
+            <div class="{{ $washBill ? 'print:space-y-0' : '' }} space-y-1">
                 <p><span class="font-semibold text-slate-900 dark:text-white">Ref:</span> {{ $invoice->invoice_number }}</p>
                 <p class="text-slate-700 dark:text-slate-300">To</p>
                 <p class="text-slate-700 dark:text-slate-300">The Managing Director</p>
@@ -652,11 +709,72 @@ new class extends Component
             <p class="font-semibold text-slate-900 dark:text-white">Date: {{ $invoice->created_at->format('d-M-Y') }}</p>
         </div>
 
-        <p class="mt-4 text-sm font-semibold text-slate-900 dark:text-white">
-            Sub: Bill For {{ $invoice->serviceCategory->name }}{{ $invoiceUnit ? ' ('.$invoiceUnit.')' : '' }} {{ $invoice->isCustomPeriod ? 'Period' : 'Month' }} Of {{ $invoice->periodLabel }}.
+        <p class="{{ $washBill ? 'print:mt-2' : '' }} mt-4 text-sm font-semibold text-slate-900 dark:text-white">
+            @if ($washBill)
+                Sub: Bill For Tiffin Supply (Wash) Month Of {{ $invoice->period_start->format('M-Y') }}.
+            @else
+                Sub: Bill For {{ $invoice->serviceCategory->name }}{{ $invoiceUnit ? ' ('.$invoiceUnit.')' : '' }} {{ $invoice->isCustomPeriod ? 'Period' : 'Month' }} Of {{ $invoice->periodLabel }}.
+            @endif
         </p>
 
-        <div class="mt-4 overflow-x-auto">
+        @if ($washBill)
+            @php
+                $washCell = 'border border-slate-400 px-1.5 py-0.5 print:py-0 print:leading-tight dark:border-slate-600';
+                $washNumber = fn (float $value): string => $value > 0 ? rtrim(rtrim(number_format($value, 2, '.', ''), '0'), '.') : '';
+            @endphp
+            <div class="mt-3 overflow-x-auto print:mt-1 print:overflow-visible">
+                <table id="wash-bill" class="w-full min-w-[640px] border-collapse text-center text-xs text-slate-800 dark:text-slate-200">
+                    <thead class="font-semibold text-slate-900 dark:text-white">
+                        <tr>
+                            <th rowspan="2" class="{{ $washCell }}">Date</th>
+                            <th colspan="4" class="{{ $washCell }}">Worker</th>
+                            <th colspan="4" class="{{ $washCell }}">Staff</th>
+                            <th rowspan="2" class="{{ $washCell }}">Total Price</th>
+                        </tr>
+                        <tr>
+                            <th class="{{ $washCell }}">Item</th>
+                            <th class="{{ $washCell }}">Qty</th>
+                            <th class="{{ $washCell }}">Rate</th>
+                            <th class="{{ $washCell }}">Price</th>
+                            <th class="{{ $washCell }}">Item</th>
+                            <th class="{{ $washCell }}">Qty</th>
+                            <th class="{{ $washCell }}">Rate</th>
+                            <th class="{{ $washCell }}">Price</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach ($washBill['rows'] as $row)
+                            <tr>
+                                <td class="{{ $washCell }} whitespace-nowrap">{{ $row->date?->format('j-M-y') }}</td>
+                                <td class="{{ $washCell }}">{{ $row->workerItem }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->workerQuantity) }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->workerRate) }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->workerPrice) }}</td>
+                                <td class="{{ $washCell }}">{{ $row->staffPrice > 0 ? 'Tiffin' : '' }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->staffQuantity) }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->staffRate) }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->staffPrice) }}</td>
+                                <td class="{{ $washCell }}">{{ $washNumber($row->total) }}</td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                    <tfoot class="font-semibold text-slate-900 dark:text-white">
+                        <tr>
+                            <td class="{{ $washCell }}" colspan="2"></td>
+                            <td class="{{ $washCell }}">{{ $washNumber($washBill['workerQuantity']) }}</td>
+                            <td class="{{ $washCell }}">Total</td>
+                            <td class="{{ $washCell }}">{{ number_format($washBill['workerPrice'], 1) }}</td>
+                            <td class="{{ $washCell }}"></td>
+                            <td class="{{ $washCell }}">{{ $washNumber($washBill['staffQuantity']) }}</td>
+                            <td class="{{ $washCell }}"></td>
+                            <td class="{{ $washCell }}">{{ number_format($washBill['staffPrice'], 1) }}</td>
+                            <td class="{{ $washCell }}">{{ number_format($washBill['total'], 1) }}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        @else
+        <div class="mt-4 overflow-x-auto print:overflow-visible">
             <table class="w-full min-w-[560px] border-collapse text-sm">
                 <thead>
                     <tr class="border border-slate-300 bg-slate-100 text-left dark:border-slate-600 dark:bg-slate-900/50">
@@ -682,13 +800,14 @@ new class extends Component
                 </tbody>
             </table>
         </div>
+        @endif
 
-        <div class="mt-4 flex justify-end">
+        <div class="{{ $washBill ? 'print:mt-0' : '' }} mt-4 flex justify-end print:break-inside-avoid">
             <table class="w-full max-w-sm text-sm">
                 <tbody>
                     <tr class="{{ (! $vatAmount && ! $due && ! $totalPaidViaPayments) ? 'font-bold text-base' : '' }}">
-                        <td class="py-1 text-slate-700 dark:text-slate-300">Total</td>
-                        <td class="py-1 text-right text-slate-900 dark:text-white">{{ number_format($total, 2) }}</td>
+                        <td class="py-1 text-slate-700 dark:text-slate-300">{{ $washBill ? 'Grand Total =' : 'Total' }}</td>
+                        <td class="py-1 text-right text-slate-900 dark:text-white">{{ $washBill ? number_format($total, 1).'৳' : number_format($total, 2) }}</td>
                     </tr>
                     @if ($vatAmount)
                         <tr>
@@ -724,16 +843,20 @@ new class extends Component
             </table>
         </div>
 
-        <p class="mt-4 text-sm text-slate-700 dark:text-slate-300">
+        <p class="{{ $washBill ? 'print:mt-0' : '' }} mt-4 text-sm text-slate-700 print:break-before-avoid dark:text-slate-300">
             In Word: {{ $amountInWords }} Taka Only.
         </p>
 
-        <div class="mt-16 flex items-end justify-between text-sm">
+        <div class="{{ $washBill ? 'mt-6 print:mt-3' : 'mt-16' }} flex items-end justify-between text-sm print:break-before-avoid print:break-inside-avoid">
             <div class="text-center">
-                <p class="w-48 border-t border-slate-400 pt-1 text-slate-700 dark:border-slate-500 dark:text-slate-300">Client Signature</p>
+                @unless ($washBill)
+                    <p class="w-48 border-t border-slate-400 pt-1 text-slate-700 dark:border-slate-500 dark:text-slate-300">Client Signature</p>
+                @endunless
             </div>
             <div class="text-center">
-                <x-application-logo class="mx-auto h-14 w-14 rounded-full border border-slate-300 dark:border-slate-600" />
+                @unless ($washBill)
+                    <x-application-logo class="mx-auto h-14 w-14 rounded-full border border-slate-300 dark:border-slate-600" />
+                @endunless
                 <p class="mt-2 font-semibold text-slate-900 dark:text-white">{{ config('company.name') }}</p>
                 <p class="mt-6 w-48 border-t border-slate-400 pt-1 text-slate-700 dark:border-slate-500 dark:text-slate-300">Authorised</p>
                 <p class="text-xs text-slate-500 dark:text-slate-400">Thanking By</p>
