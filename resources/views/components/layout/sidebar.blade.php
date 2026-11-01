@@ -10,22 +10,24 @@
     :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
     class="fixed inset-y-0 left-0 z-40 flex w-64 -translate-x-full flex-col border-r border-slate-200 bg-white transition-transform duration-200 ease-in-out lg:static lg:translate-x-0 dark:border-slate-800 dark:bg-slate-900 print:hidden"
 >
-    <a href="{{ route('dashboard') }}" wire:navigate class="flex h-16 shrink-0 items-center gap-2 border-b border-slate-200 px-4 dark:border-slate-800">
+    <a href="{{ auth()->user()->landsOnCanteen() ? route('canteen.index') : route('dashboard') }}" wire:navigate class="flex h-16 shrink-0 items-center gap-2 border-b border-slate-200 px-4 dark:border-slate-800">
         <x-application-logo class="h-8 w-8" />
         <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ config('app.name', 'Rezia Enterprise') }}</span>
         <x-badge color="amber">Beta</x-badge>
     </a>
 
     <nav class="flex-1 space-y-1 overflow-y-auto p-4">
-        <x-layout.sidebar-link :href="route('dashboard')" :active="request()->routeIs('dashboard')">
-            <x-slot:icon>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M3 11.5L12 4l9 7.5" />
-                    <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
-                </svg>
-            </x-slot:icon>
-            Dashboard
-        </x-layout.sidebar-link>
+        @unless (auth()->user()->landsOnCanteen())
+            <x-layout.sidebar-link :href="route('dashboard')" :active="request()->routeIs('dashboard')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 11.5L12 4l9 7.5" />
+                        <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
+                    </svg>
+                </x-slot:icon>
+                Dashboard
+            </x-layout.sidebar-link>
+        @endunless
 
         @can('companies.view')
             <x-layout.sidebar-link :href="route('companies.index')" :active="request()->routeIs('companies.*')">
@@ -62,6 +64,18 @@
                     </svg>
                 </x-slot:icon>
                 Egg Purchases & Stock
+            </x-layout.sidebar-link>
+        @endcan
+
+        @can('egg_sales.view')
+            <x-layout.sidebar-link :href="route('egg-sales.index')" :active="request()->routeIs('egg-sales.*')">
+                <x-slot:icon>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 3.5h12a1 1 0 0 1 1 1V21l-3-1.75L13.5 21 12 20l-1.5 1L8 19.25 5 21V4.5a1 1 0 0 1 1-1z" />
+                        <path d="M9 8.5h6M9 12h6" />
+                    </svg>
+                </x-slot:icon>
+                Egg Sales
             </x-layout.sidebar-link>
         @endcan
 

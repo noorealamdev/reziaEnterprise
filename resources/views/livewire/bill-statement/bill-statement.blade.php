@@ -123,7 +123,7 @@ new class extends Component
                 return (object) [
                     'company' => $invoice->company,
                     'category' => $invoice->serviceCategory,
-                    'period_start' => $invoice->period_start,
+                    'period_start' => $invoice->statementMonth,
                     // The raw bill total before VAT is deducted — shown
                     // alongside 'amount' (the net, VAT-deducted figure) so
                     // the statement doesn't hide what VAT was taken off.
@@ -417,7 +417,7 @@ new class extends Component
                                         <span class="hidden text-slate-400 dark:text-slate-500 print:inline">Not invoiced</span>
                                     @endif
                                 </td>
-                                <td class="px-4 py-3 text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ $row->period_start->format('F Y') }}</td>
+                                <td class="whitespace-nowrap px-4 py-3 text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ $row->invoice?->periodLabel ?? $row->period_start->format('F Y') }}</td>
                                 <td class="px-4 py-3 text-right text-slate-600 dark:text-slate-400 print:px-2 print:py-1">{{ number_format($row->actualAmount, 2) }}</td>
                                 <td class="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200 print:px-2 print:py-1">{{ number_format($row->amount, 2) }}</td>
                                 <td class="px-4 py-3 print:px-2 print:py-1">

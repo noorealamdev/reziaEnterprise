@@ -21,13 +21,25 @@ $maxWidth = [
             // All focusable element types...
             let selector = 'a, button, input:not([type=\'hidden\']), textarea, select, details, [tabindex]:not([tabindex=\'-1\'])'
             return [...$el.querySelectorAll(selector)]
-                // All non-disabled elements...
-                .filter(el => ! el.hasAttribute('disabled'))
+                // All non-disabled elements the Tab key is allowed to stop on...
+                .filter(el => ! el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1')
         },
         firstFocusable() { return this.focusables()[0] },
         lastFocusable() { return this.focusables().slice(-1)[0] },
-        nextFocusable() { return this.focusables()[this.nextFocusableIndex()] || this.firstFocusable() },
-        prevFocusable() { return this.focusables()[this.prevFocusableIndex()] || this.lastFocusable() },
+        // A field skipped by Tab can still be clicked, so Tab carries on from where it sits on the page.
+        isOnSkippedField() { return document.activeElement?.getAttribute('tabindex') === '-1' },
+        nextFocusable() {
+            if (this.isOnSkippedField()) {
+                return this.focusables().find(el => document.activeElement.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) || this.firstFocusable()
+            }
+            return this.focusables()[this.nextFocusableIndex()] || this.firstFocusable()
+        },
+        prevFocusable() {
+            if (this.isOnSkippedField()) {
+                return this.focusables().reverse().find(el => document.activeElement.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) || this.lastFocusable()
+            }
+            return this.focusables()[this.prevFocusableIndex()] || this.lastFocusable()
+        },
         nextFocusableIndex() { return (this.focusables().indexOf(document.activeElement) + 1) % (this.focusables().length + 1) },
         prevFocusableIndex() { return Math.max(0, this.focusables().indexOf(document.activeElement)) -1 },
     }"

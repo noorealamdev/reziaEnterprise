@@ -56,6 +56,50 @@ class Invoice extends Model
         );
     }
 
+    /**
+     * Only a generated bill can have custom dates — a past paper bill stores
+     * its single bill date in both period columns but is still a month's bill.
+     */
+    protected function isCustomPeriod(): Attribute
+    {
+        return Attribute::make(
+            get: fn (): bool => $this->manual_amount === null && ! (
+                $this->period_start->isSameDay($this->period_start->copy()->startOfMonth())
+                && $this->period_end->isSameDay($this->period_start->copy()->endOfMonth())
+            ),
+        );
+    }
+
+    /**
+     * "October 2026" for a normal bill, otherwise the exact dates chosen.
+     */
+    protected function periodLabel(): Attribute
+    {
+        return Attribute::make(
+            get: function (): string {
+                if (! $this->isCustomPeriod) {
+                    return $this->period_start->format('F Y');
+                }
+
+                $from = $this->period_start->format('d-M-Y');
+                $to = $this->period_end->format('d-M-Y');
+
+                return $from === $to ? $from : "{$from} to {$to}";
+            },
+        );
+    }
+
+    /**
+     * The month a bill counts under on the Bill Statement. A 25 Sep to 25 Oct
+     * bill is October's bill, so it belongs to the month its dates end in.
+     */
+    protected function statementMonth(): Attribute
+    {
+        return Attribute::make(
+            get: fn () => $this->isCustomPeriod ? $this->period_end->copy()->startOfMonth() : $this->period_start,
+        );
+    }
+
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);

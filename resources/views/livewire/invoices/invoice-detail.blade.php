@@ -455,7 +455,7 @@ new class extends Component
                 @if ($invoiceUnit)
                     · {{ $invoiceUnit }}
                 @endif
-                · {{ $invoice->period_start->format('F Y') }}
+                · {{ $invoice->periodLabel }}
             </p>
             @if ($invoice->manual_description)
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ $invoice->manual_description }}</p>
@@ -653,7 +653,7 @@ new class extends Component
         </div>
 
         <p class="mt-4 text-sm font-semibold text-slate-900 dark:text-white">
-            Sub: Bill For {{ $invoice->serviceCategory->name }}{{ $invoiceUnit ? ' ('.$invoiceUnit.')' : '' }} Month Of {{ $invoice->period_start->format('F Y') }}.
+            Sub: Bill For {{ $invoice->serviceCategory->name }}{{ $invoiceUnit ? ' ('.$invoiceUnit.')' : '' }} {{ $invoice->isCustomPeriod ? 'Period' : 'Month' }} Of {{ $invoice->periodLabel }}.
         </p>
 
         <div class="mt-4 overflow-x-auto">

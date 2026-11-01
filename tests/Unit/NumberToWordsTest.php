@@ -35,3 +35,11 @@ test('fractional amounts round to the nearest taka', function () {
     expect(NumberToWords::taka(999.60))->toBe('One Thousand');
     expect(NumberToWords::taka(999.40))->toBe('Nine Hundred Ninety Nine');
 });
+
+test('amounts can be spelled out exactly with their paisa', function () {
+    expect(NumberToWords::takaWithPaisa(4157.50))->toBe('Four Thousand One Hundred Fifty Seven Taka And Fifty Paisa');
+    expect(NumberToWords::takaWithPaisa(1961.25))->toBe('One Thousand Nine Hundred Sixty One Taka And Twenty Five Paisa');
+    expect(NumberToWords::takaWithPaisa(999.99))->toBe('Nine Hundred Ninety Nine Taka And Ninety Nine Paisa');
+    expect(NumberToWords::takaWithPaisa(2000))->toBe('Two Thousand Taka');
+    expect(NumberToWords::takaWithPaisa(0))->toBe('Zero Taka');
+});

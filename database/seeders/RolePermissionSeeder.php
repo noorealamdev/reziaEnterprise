@@ -15,7 +15,8 @@ class RolePermissionSeeder extends Seeder
      * ServiceCategoriesManage and SettingsManage (structural/branding
      * config, not something they "submit"), is intentionally left out.
      * Staff starts with nothing — the Super Admin grants permissions to
-     * them individually via Settings → Roles & Permissions.
+     * them individually via Settings → Roles & Permissions. Canteen Manager
+     * runs the Canteen and sees nothing else.
      */
     public function run(): void
     {
@@ -47,6 +48,13 @@ class RolePermissionSeeder extends Seeder
         foreach ($accountantGrants as $permission) {
             RolePermission::updateOrCreate([
                 'role' => UserRole::Accountant->value,
+                'permission' => $permission->value,
+            ]);
+        }
+
+        foreach ([Permission::CanteenView, Permission::CanteenCreate, Permission::CanteenModify] as $permission) {
+            RolePermission::updateOrCreate([
+                'role' => UserRole::CanteenManager->value,
                 'permission' => $permission->value,
             ]);
         }

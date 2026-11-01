@@ -82,4 +82,15 @@ class User extends Authenticatable
 
         return $this->grantedPermissionKeys[$permission->value] ?? false;
     }
+
+    /**
+     * A Canteen Manager has nothing to do on the Dashboard, so the Canteen is
+     * their home page. Granting them the Dashboard later hands it back.
+     */
+    public function landsOnCanteen(): bool
+    {
+        return $this->role === UserRole::CanteenManager
+            && $this->hasPermission(Permission::CanteenView)
+            && ! $this->hasPermission(Permission::DashboardView);
+    }
 }

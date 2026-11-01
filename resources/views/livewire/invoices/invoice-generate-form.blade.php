@@ -4,10 +4,12 @@ use App\Models\Company;
 use App\Models\Invoice;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Livewire\Volt\Component;
 
@@ -25,6 +27,12 @@ new class extends Component
 
     public ?string $vatRate = null;
 
+    public string $periodType = 'month';
+
+    public string $billFrom = '';
+
+    public string $billTo = '';
+
     public function mount(): void
     {
         $this->company_id = request()->integer('company') ?: null;
@@ -34,6 +42,8 @@ new class extends Component
         if (preg_match('/^\d{4}-\d{2}$/', $period)) {
             $this->period = $period;
         }
+
+        $this->startProgressBillingCycle();
     }
 
     public function updatedCompanyId(): void
@@ -41,17 +51,114 @@ new class extends Component
         $this->service_category_id = null;
         $this->tiffin_department_id = null;
         $this->period = '';
+        $this->startProgressBillingCycle();
     }
 
     public function updatedServiceCategoryId(): void
     {
         $this->tiffin_department_id = null;
         $this->period = '';
+        $this->startProgressBillingCycle();
     }
 
     public function updatedTiffinDepartmentId(): void
     {
         $this->period = '';
+        $this->startProgressBillingCycle();
+    }
+
+    /**
+     * Progress Apparels bills from the 25th to the 25th rather than by
+     * calendar month — like Simba's units, a hardcoded exception for this one
+     * company rather than a generic feature. Opens on the cycle holding the
+     * oldest unbilled entry, so bills are raised in order, and every date
+     * stays editable for a bill that runs differently.
+     */
+    private function startProgressBillingCycle(): void
+    {
+        $this->periodType = 'month';
+        $this->billFrom = '';
+        $this->billTo = '';
+
+        if (! $this->isProgressApparels() || ! $this->service_category_id) {
+            return;
+        }
+
+        $this->periodType = 'custom';
+
+        $oldestUnbilledDate = JobEntry::where('company_id', $this->company_id)
+            ->where('service_category_id', $this->service_category_id)
+            ->when($this->tiffin_department_id, fn ($query, $departmentId) => $query->where('tiffin_department_id', $departmentId))
+            ->when($this->selectedMonth(), fn ($query, $month) => $query
+                ->whereDate('entry_date', '>=', $month[0]->toDateString())
+                ->whereDate('entry_date', '<=', $month[1]->toDateString()))
+            ->whereNull('invoice_id')
+            ->min('entry_date');
+
+        $date = Carbon::parse($oldestUnbilledDate ?? now())->startOfDay();
+        $cycleEnd = $date->day <= 25 ? $date->copy()->day(25) : $date->copy()->startOfMonth()->addMonthNoOverflow()->day(25);
+
+        $this->billFrom = $cycleEnd->copy()->startOfMonth()->subMonthNoOverflow()->day(25)->toDateString();
+        $this->billTo = $cycleEnd->toDateString();
+    }
+
+    private function isProgressApparels(): bool
+    {
+        return $this->company_id && Company::whereKey($this->company_id)->value('code') === 'PAL';
+    }
+
+    private function usesCustomDates(): bool
+    {
+        return $this->periodType === 'custom' && $this->isProgressApparels();
+    }
+
+    /**
+     * @return array{0: Carbon, 1: Carbon}|null
+     */
+    private function selectedMonth(): ?array
+    {
+        if (! preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $this->period)) {
+            return null;
+        }
+
+        $start = Carbon::createFromFormat('Y-m-d', "{$this->period}-01")->startOfDay();
+
+        return [$start, $start->copy()->endOfMonth()->startOfDay()];
+    }
+
+    /**
+     * The dates this bill covers, or null while they aren't a valid range.
+     *
+     * @return array{0: Carbon, 1: Carbon}|null
+     */
+    private function selectedDates(): ?array
+    {
+        if (! $this->usesCustomDates()) {
+            return $this->selectedMonth();
+        }
+
+        $datesAreValid = Validator::make(
+            ['from' => $this->billFrom, 'to' => $this->billTo],
+            ['from' => ['required', 'date_format:Y-m-d'], 'to' => ['required', 'date_format:Y-m-d', 'after_or_equal:from']],
+        )->passes();
+
+        return $datesAreValid
+            ? [Carbon::parse($this->billFrom)->startOfDay(), Carbon::parse($this->billTo)->startOfDay()]
+            : null;
+    }
+
+    /**
+     * @param  array{0: Carbon, 1: Carbon}  $dates
+     * @return Builder<JobEntry>
+     */
+    private function unbilledEntriesIn(array $dates): Builder
+    {
+        return JobEntry::where('company_id', $this->company_id)
+            ->where('service_category_id', $this->service_category_id)
+            ->when($this->tiffin_department_id, fn ($query, $departmentId) => $query->where('tiffin_department_id', $departmentId))
+            ->whereDate('entry_date', '>=', $dates[0]->toDateString())
+            ->whereDate('entry_date', '<=', $dates[1]->toDateString())
+            ->whereNull('invoice_id');
     }
 
     public function generate(): void
@@ -59,6 +166,7 @@ new class extends Component
         Gate::authorize('invoices.create');
 
         $requiresDepartment = $this->tiffinDepartmentRequired();
+        $usesCustomDates = $this->usesCustomDates();
 
         $validated = $this->validate([
             'company_id' => ['required', 'integer', 'exists:companies,id'],
@@ -76,23 +184,21 @@ new class extends Component
                 'integer',
                 Rule::exists('company_tiffin_departments', 'tiffin_department_id')->where('company_id', $this->company_id),
             ],
-            'period' => ['required', 'date_format:Y-m'],
+            'period' => $usesCustomDates ? ['nullable'] : ['required', 'date_format:Y-m'],
+            'billFrom' => $usesCustomDates ? ['required', 'date_format:Y-m-d'] : ['nullable'],
+            'billTo' => $usesCustomDates ? ['required', 'date_format:Y-m-d', 'after_or_equal:billFrom'] : ['nullable'],
             'invoice_number' => ['required', 'string', 'max:255', Rule::unique('invoices', 'invoice_number')],
             'vatRate' => ['nullable', 'numeric', 'min:0', 'max:100'],
-        ]);
+        ], [], ['billFrom' => 'From date', 'billTo' => 'To date']);
 
-        $start = Carbon::createFromFormat('Y-m', $this->period)->startOfMonth();
-        $end = $start->copy()->endOfMonth();
+        [$start, $end] = $dates = $this->selectedDates();
 
-        $entries = JobEntry::where('company_id', $this->company_id)
-            ->where('service_category_id', $this->service_category_id)
-            ->when($validated['tiffin_department_id'] ?? null, fn ($query, $departmentId) => $query->where('tiffin_department_id', $departmentId))
-            ->whereBetween('entry_date', [$start->toDateString(), $end->toDateString()])
-            ->whereNull('invoice_id')
-            ->get();
+        $entries = $this->unbilledEntriesIn($dates)->get();
 
         if ($entries->isEmpty()) {
-            $this->addError('period', 'There are no unbilled job entries for this company and category in the selected month.');
+            $usesCustomDates
+                ? $this->addError('billFrom', 'There are no unbilled job entries for this company and category in these dates.')
+                : $this->addError('period', 'There are no unbilled job entries for this company and category in the selected month.');
 
             return;
         }
@@ -193,26 +299,25 @@ new class extends Component
             : collect();
 
         $preview = null;
+        $usesCustomDates = $this->usesCustomDates();
+        $selectedDates = $this->selectedDates();
+        $isReadyForDates = $this->company_id && $this->service_category_id && (! $requiresDepartment || $this->tiffin_department_id);
 
-        if (
-            $this->company_id && $this->service_category_id && (! $requiresDepartment || $this->tiffin_department_id)
-            && preg_match('/^\d{4}-\d{2}$/', $this->period)
-        ) {
-            $start = Carbon::createFromFormat('Y-m', $this->period)->startOfMonth();
-            $end = $start->copy()->endOfMonth();
+        if ($isReadyForDates && $selectedDates) {
+            [$start, $end] = $selectedDates;
 
-            $unbilledQuery = JobEntry::where('company_id', $this->company_id)
-                ->where('service_category_id', $this->service_category_id)
-                ->when($requiresDepartment, fn ($query) => $query->where('tiffin_department_id', $this->tiffin_department_id))
-                ->whereBetween('entry_date', [$start->toDateString(), $end->toDateString()])
-                ->whereNull('invoice_id');
+            $unbilledQuery = $this->unbilledEntriesIn($selectedDates);
 
             $preview = [
                 'count' => $unbilledQuery->count(),
                 'total' => $unbilledQuery->sum('bill_amount'),
                 'existingInvoices' => Invoice::where('company_id', $this->company_id)
                     ->where('service_category_id', $this->service_category_id)
-                    ->where('period_start', $start->toDateString())
+                    ->when(
+                        $this->isProgressApparels(),
+                        fn ($query) => $query->whereDate('period_start', '<=', $end->toDateString())->whereDate('period_end', '>=', $start->toDateString()),
+                        fn ($query) => $query->where('period_start', $start->toDateString()),
+                    )
                     ->when($requiresDepartment, fn ($query) => $query->whereHas(
                         'jobEntries',
                         fn ($entryQuery) => $entryQuery->where('tiffin_department_id', $this->tiffin_department_id)
@@ -228,6 +333,10 @@ new class extends Component
             'departmentFieldLabel' => $this->departmentFieldLabel(),
             'periodOptions' => $periodOptions,
             'preview' => $preview,
+            'isProgressApparels' => $this->isProgressApparels(),
+            'usesCustomDates' => $usesCustomDates,
+            'isReadyForDates' => $isReadyForDates,
+            'datesAreInvalid' => $usesCustomDates && $isReadyForDates && ! $selectedDates,
         ];
     }
 }; ?>
@@ -282,27 +391,69 @@ new class extends Component
         </div>
     @endif
 
-    <div>
-        <x-input-label for="period" value="Month" />
-        <x-select-input wire:model.live="period" id="period" class="mt-1 block w-full" required :disabled="! $service_category_id || ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)">
-            <option value="">
-                @if (! $service_category_id)
-                    Select a category first
-                @elseif ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)
-                    Select {{ $departmentFieldLabel === 'Unit' ? 'a unit' : 'a department' }} first
-                @else
-                    Select a month…
-                @endif
-            </option>
-            @foreach ($periodOptions as $option)
-                <option value="{{ $option }}">{{ \Illuminate\Support\Carbon::createFromFormat('Y-m', $option)->format('F Y') }}</option>
+    @if ($isProgressApparels && $service_category_id)
+        <div class="inline-flex flex-wrap gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-900/50">
+            @foreach (['custom' => 'Custom Dates', 'month' => 'Whole Month'] as $type => $label)
+                <button
+                    type="button"
+                    wire:click="$set('periodType', '{{ $type }}')"
+                    aria-pressed="{{ $periodType === $type ? 'true' : 'false' }}"
+                    class="rounded-lg px-4 py-2 text-sm font-medium transition {{ $periodType === $type ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200' }}"
+                >
+                    {{ $label }}
+                </button>
             @endforeach
-        </x-select-input>
-        @if ($service_category_id && ($tiffinDepartments->isEmpty() || $tiffin_department_id) && $periodOptions->isEmpty())
-            <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">This company has no entries in this category yet.</p>
-        @endif
-        <x-input-error :messages="$errors->get('period')" class="mt-2" />
-    </div>
+        </div>
+    @endif
+
+    @if ($usesCustomDates)
+        <div>
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <x-input-label for="bill_from" value="From" />
+                    <x-text-input wire:model.live="billFrom" id="bill_from" type="date" class="mt-1 block w-full" required :disabled="! $isReadyForDates" />
+                    <x-input-error :messages="$errors->get('billFrom')" class="mt-2" />
+                </div>
+                <div>
+                    <x-input-label for="bill_to" value="To" />
+                    <x-text-input wire:model.live="billTo" id="bill_to" type="date" class="mt-1 block w-full" required :disabled="! $isReadyForDates" />
+                    <x-input-error :messages="$errors->get('billTo')" class="mt-2" />
+                </div>
+            </div>
+            @if (! $isReadyForDates)
+                <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">Select {{ $departmentFieldLabel === 'Unit' ? 'a unit' : 'a department' }} first.</p>
+            @elseif ($datesAreInvalid)
+                <p class="mt-2 text-sm text-red-600 dark:text-red-400">Choose a From and To date. To can't be before From.</p>
+            @else
+                <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">
+                    Progress Apparels bills run from the 25th to the 25th. Change the dates if this bill is different.
+                    An entry dated on the 25th is billed once, on whichever bill is generated first.
+                </p>
+            @endif
+        </div>
+    @else
+        <div>
+            <x-input-label for="period" value="Month" />
+            <x-select-input wire:model.live="period" id="period" class="mt-1 block w-full" required :disabled="! $service_category_id || ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)">
+                <option value="">
+                    @if (! $service_category_id)
+                        Select a category first
+                    @elseif ($tiffinDepartments->isNotEmpty() && ! $tiffin_department_id)
+                        Select {{ $departmentFieldLabel === 'Unit' ? 'a unit' : 'a department' }} first
+                    @else
+                        Select a month…
+                    @endif
+                </option>
+                @foreach ($periodOptions as $option)
+                    <option value="{{ $option }}">{{ \Illuminate\Support\Carbon::createFromFormat('Y-m-d', "{$option}-01")->format('F Y') }}</option>
+                @endforeach
+            </x-select-input>
+            @if ($service_category_id && ($tiffinDepartments->isEmpty() || $tiffin_department_id) && $periodOptions->isEmpty())
+                <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">This company has no entries in this category yet.</p>
+            @endif
+            <x-input-error :messages="$errors->get('period')" class="mt-2" />
+        </div>
+    @endif
 
     <div>
         <x-input-label for="invoice_number" value="Invoice Number" />
@@ -315,7 +466,7 @@ new class extends Component
             <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
                 <p class="font-medium">
                     {{ $preview['existingInvoices']->count() }} {{ Str::plural('invoice', $preview['existingInvoices']->count()) }} already
-                    {{ $preview['existingInvoices']->count() === 1 ? 'exists' : 'exist' }} for this company/category in this month:
+                    {{ $preview['existingInvoices']->count() === 1 ? 'exists' : 'exist' }} for this company/category in {{ $usesCustomDates ? 'these dates' : 'this month' }}:
                 </p>
                 <ul class="mt-1 list-inside list-disc">
                     @foreach ($preview['existingInvoices'] as $existing)
@@ -337,7 +488,7 @@ new class extends Component
                     <span class="font-semibold text-slate-900 dark:text-white">{{ number_format($preview['total'], 2) }}</span>.
                 </p>
             @else
-                <p class="text-sm text-slate-500 dark:text-slate-400">No unbilled entries found for this company/category in this month.</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">No unbilled entries found for this company/category in {{ $usesCustomDates ? 'these dates' : 'this month' }}.</p>
             @endif
         </div>
     @endif

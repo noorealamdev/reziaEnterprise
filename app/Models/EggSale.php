@@ -1,0 +1,53 @@
+<?php
+
+namespace App\Models;
+
+use Database\Factories\EggSaleFactory;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class EggSale extends Model
+{
+    /** @use HasFactory<EggSaleFactory> */
+    use HasFactory;
+
+    protected $fillable = [
+        'sale_date',
+        'quantity',
+        'sale_rate',
+        'sale_amount',
+        'egg_buyer_id',
+        'egg_invoice_id',
+        'remarks',
+        'created_by',
+    ];
+
+    /**
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'sale_date' => 'date',
+            'quantity' => 'decimal:2',
+            'sale_rate' => 'decimal:2',
+            'sale_amount' => 'decimal:2',
+        ];
+    }
+
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function buyer(): BelongsTo
+    {
+        return $this->belongsTo(EggBuyer::class, 'egg_buyer_id');
+    }
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(EggInvoice::class, 'egg_invoice_id');
+    }
+}

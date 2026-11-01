@@ -64,6 +64,13 @@ class UserFactory extends Factory
         ]);
     }
 
+    public function canteenManager(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::CanteenManager,
+        ]);
+    }
+
     public function inactive(): static
     {
         return $this->state(fn (array $attributes) => [

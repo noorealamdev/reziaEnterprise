@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Company;
+use App\Models\EggInvoice;
 use App\Models\Employee;
 use App\Models\Invoice;
 use App\Models\JobEntry;
@@ -45,7 +46,8 @@ Route::get('system/clear', function () {
 // landing page (see login.blade.php's redirectIntended default), so it
 // must stay reachable by every authenticated user regardless of role.
 // Its Profit panel is instead hidden internally behind @can('dashboard.view_profit').
-Route::view('dashboard', 'dashboard')
+// A Canteen Manager goes straight on to the Canteen, their home page.
+Route::get('dashboard', fn () => auth()->user()->landsOnCanteen() ? redirect()->route('canteen.index') : view('dashboard'))
     ->middleware(['auth', 'verified'])
     ->name('dashboard');
 
@@ -117,6 +119,10 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('egg-sales', fn () => view('egg-sales.index'))
         ->middleware('can:egg_sales.view')
         ->name('egg-sales.index');
+
+    Route::get('egg-sales/bills/{eggInvoice}', fn (EggInvoice $eggInvoice) => view('egg-sales.bill', [
+        'bill' => $eggInvoice,
+    ]))->middleware('can:egg_sales.view')->name('egg-sales.bills.show');
 
     Route::get('company-purchases', fn () => view('company-purchases.index'))
         ->middleware('can:company_purchases.view')

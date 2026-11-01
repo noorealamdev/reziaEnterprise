@@ -59,15 +59,15 @@ test('an entry is recorded with its net profit computed from profit minus daily 
     Volt::test('canteen.ledger-manager')
         ->call('startCreate')
         ->set('entry_date', '2026-09-01')
-        ->set('total_purchases', '13280')
-        ->set('total_profit', '4160')
-        ->set('daily_cost', '760')
+        ->set('items.bakery_1.quantity', '300')
+        ->set('daily_cost', '100')
         ->call('save')
         ->assertHasNoErrors();
 
     $entry = CanteenEntry::sole();
-    expect((float) $entry->total_purchases)->toBe(13280.0);
-    expect($entry->net_profit)->toBe(3400.0);
+    expect((float) $entry->total_purchases)->toBe(2400.0);
+    expect((float) $entry->total_profit)->toBe(600.0);
+    expect($entry->net_profit)->toBe(500.0);
 });
 
 test('a day can only be logged once', function () {
@@ -77,8 +77,7 @@ test('a day can only be logged once', function () {
     Volt::test('canteen.ledger-manager')
         ->call('startCreate')
         ->set('entry_date', '2026-09-01')
-        ->set('total_purchases', '14000')
-        ->set('total_profit', '4000')
+        ->set('items.bakery_1.quantity', '300')
         ->set('daily_cost', '200')
         ->call('save')
         ->assertHasErrors(['entry_date']);
@@ -88,26 +87,26 @@ test('a day can only be logged once', function () {
 
 test('editing an entry keeps its own date from tripping the uniqueness check', function () {
     $this->actingAs(User::factory()->create());
-    $entry = CanteenEntry::factory()->create(['entry_date' => '2026-09-01', 'total_profit' => 4000, 'daily_cost' => 200]);
+    $entry = CanteenEntry::factory()->create(['entry_date' => '2026-09-01', 'daily_cost' => 200]);
 
     Volt::test('canteen.ledger-manager')
         ->call('startEdit', $entry->id)
-        ->set('total_profit', '4800')
+        ->set('items.porota.quantity', '100')
         ->call('save')
         ->assertHasNoErrors();
 
-    expect((float) $entry->fresh()->total_profit)->toBe(4800.0);
-    expect($entry->fresh()->net_profit)->toBe(4600.0);
+    expect((float) $entry->fresh()->total_profit)->toBe(200.0);
+    expect($entry->fresh()->net_profit)->toBe(0.0);
 });
 
-test('date, purchases, profit and daily cost are all required', function () {
+test('date, a quantity and daily cost are all required', function () {
     $this->actingAs(User::factory()->create());
 
     Volt::test('canteen.ledger-manager')
         ->call('startCreate')
         ->set('entry_date', '')
         ->call('save')
-        ->assertHasErrors(['entry_date', 'total_purchases', 'total_profit', 'daily_cost']);
+        ->assertHasErrors(['entry_date', 'items', 'daily_cost']);
 
     expect(CanteenEntry::count())->toBe(0);
 });
@@ -135,7 +134,7 @@ test('editing and deleting an entry is reflected immediately', function () {
 
     Volt::test('canteen.ledger-manager')
         ->call('startEdit', $entry->id)
-        ->set('total_purchases', '20000')
+        ->set('items.vaji.quantity', '2500')
         ->call('save')
         ->assertHasNoErrors();
     expect((float) $entry->fresh()->total_purchases)->toBe(20000.0);
@@ -157,8 +156,7 @@ test('a user with only canteen.view sees the ledger but cannot add, edit or dele
         ->assertDontSee('+ Add Entry')
         ->call('startCreate')
         ->set('entry_date', '2026-09-10')
-        ->set('total_purchases', '100')
-        ->set('total_profit', '50')
+        ->set('items.vaji.quantity', '10')
         ->set('daily_cost', '10')
         ->call('save')
         ->assertForbidden();
@@ -254,8 +252,7 @@ test('creating, editing and deleting an entry each show a toast alert', function
     Volt::test('canteen.ledger-manager')
         ->call('startCreate')
         ->set('entry_date', '2026-09-01')
-        ->set('total_purchases', '13280')
-        ->set('total_profit', '4160')
+        ->set('items.porota.quantity', '150')
         ->set('daily_cost', '760')
         ->call('save')
         ->assertDispatched('toast', message: 'Entry recorded.', type: 'success');
@@ -264,7 +261,7 @@ test('creating, editing and deleting an entry each show a toast alert', function
 
     Volt::test('canteen.ledger-manager')
         ->call('startEdit', $entry->id)
-        ->set('total_profit', '4500')
+        ->set('items.porota.quantity', '200')
         ->call('save')
         ->assertDispatched('toast', message: 'Entry updated.', type: 'success');
 

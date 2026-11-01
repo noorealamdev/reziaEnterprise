@@ -61,6 +61,20 @@ class NumberToWords
     }
 
     /**
+     * Spell out an amount exactly, keeping any paisa, for bills whose totals
+     * are not always whole Taka (e.g. "Four Thousand One Hundred Fifty Seven
+     * Taka And Fifty Paisa").
+     */
+    public static function takaWithPaisa(float $amount): string
+    {
+        $totalPaisa = (int) round($amount * 100);
+        $taka = self::taka(intdiv($totalPaisa, 100)).' Taka';
+        $paisa = $totalPaisa % 100;
+
+        return $paisa > 0 ? $taka.' And '.self::underHundred($paisa).' Paisa' : $taka;
+    }
+
+    /**
      * A value from 1-999 (used for the Crore/Lakh/Thousand groups, which
      * can themselves run up to three digits, e.g. "Twelve Crore").
      */

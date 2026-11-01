@@ -1,6 +1,6 @@
 <?php
 
-use App\Models\EggSaleTransaction;
+use App\Models\EggSale;
 use App\Models\EggWaste;
 use App\Models\JobEntry;
 use App\Models\ServiceCategory;
@@ -530,7 +530,7 @@ new class extends Component
             ->where('supply_type', 'Egg')
             ->sum('quantity');
 
-        $totalSold = (float) EggSaleTransaction::where('type', EggSaleTransaction::TYPE_SOLD)->sum('quantity');
+        $totalSold = (float) EggSale::sum('quantity');
         $totalWasted = (float) EggWaste::sum('quantity');
 
         // The whole egg business's own P&L, across every destination eggs
@@ -544,7 +544,7 @@ new class extends Component
         $tiffinRevenue = (float) JobEntry::whereNotNull('tiffin_department_id')
             ->where('supply_type', 'Egg')
             ->sum('cost_amount');
-        $externalRevenue = EggSaleTransaction::totalRevenue();
+        $externalRevenue = (float) EggSale::sum('sale_amount');
         $totalPurchaseCost = (float) TiffinItemPurchase::sum('purchase_amount');
         $eggProfitTotal = $tiffinRevenue + $externalRevenue - $totalPurchaseCost;
 
@@ -554,7 +554,7 @@ new class extends Component
             'eggTotalSold' => $totalSold,
             'eggTotalWasted' => $totalWasted,
             'eggInStock' => $totalPurchased - $totalConsumed - $totalSold - $totalWasted,
-            'eggTotalRevenue' => EggSaleTransaction::totalRevenue(),
+            'eggTotalRevenue' => (float) EggSale::sum('sale_amount'),
             'eggProfitTotal' => round($eggProfitTotal, 2),
         ];
     }

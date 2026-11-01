@@ -14,6 +14,9 @@ new class extends Component
     /** @var array<string, bool> */
     public array $staffGrants = [];
 
+    /** @var array<string, bool> */
+    public array $canteenManagerGrants = [];
+
     public function mount(): void
     {
         $this->loadGrants();
@@ -30,10 +33,12 @@ new class extends Component
     {
         $accountantKeys = RolePermission::where('role', UserRole::Accountant->value)->pluck('permission')->all();
         $staffKeys = RolePermission::where('role', UserRole::Staff->value)->pluck('permission')->all();
+        $canteenManagerKeys = RolePermission::where('role', UserRole::CanteenManager->value)->pluck('permission')->all();
 
         foreach (Permission::cases() as $permission) {
             $this->accountantGrants[$permission->name] = in_array($permission->value, $accountantKeys, true);
             $this->staffGrants[$permission->name] = in_array($permission->value, $staffKeys, true);
+            $this->canteenManagerGrants[$permission->name] = in_array($permission->value, $canteenManagerKeys, true);
         }
     }
 
@@ -45,6 +50,11 @@ new class extends Component
     public function saveStaff(): void
     {
         $this->saveRole(UserRole::Staff, $this->staffGrants);
+    }
+
+    public function saveCanteenManager(): void
+    {
+        $this->saveRole(UserRole::CanteenManager, $this->canteenManagerGrants);
     }
 
     /**
@@ -78,10 +88,10 @@ new class extends Component
 
 <div class="space-y-6">
     <p class="text-xs text-slate-500 dark:text-slate-400">
-        Super Admin always has full access and isn't shown here. Accountant and Staff only ever have exactly what's checked below.
+        Super Admin always has full access and isn't shown here. Every other role only ever has exactly what's checked below.
     </p>
 
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <form wire:submit="saveAccountant" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
             <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Accountant</h3>
 
@@ -127,6 +137,30 @@ new class extends Component
 
             <x-primary-button type="submit" class="mt-5">
                 Save Staff Permissions
+            </x-primary-button>
+        </form>
+
+        <form wire:submit="saveCanteenManager" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-800">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Canteen Manager</h3>
+
+            <div class="mt-4 space-y-4">
+                @foreach ($groupedPermissions as $group => $permissions)
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ $group }}</p>
+                        <div class="mt-1 space-y-1">
+                            @foreach ($permissions as $permission)
+                                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                                    <input type="checkbox" wire:model="canteenManagerGrants.{{ $permission->name }}" class="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500">
+                                    {{ $permission->label() }}
+                                </label>
+                            @endforeach
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+
+            <x-primary-button type="submit" class="mt-5">
+                Save Canteen Manager Permissions
             </x-primary-button>
         </form>
     </div>
